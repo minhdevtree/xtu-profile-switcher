@@ -52,7 +52,8 @@ namespace XtuProfileSwitcher
             A("power.unknown", "Power source unknown", "Chưa rõ nguồn điện");
 
             // profile table
-            A("pr.title", "Profiles", "Profile");
+            A("tab.profiles", "Profiles", "Profile");
+            A("tab.settings", "Settings", "Cài đặt");
             A("pr.new", "New profile", "Profile mới");
             A("col.name", "Name", "Tên");
             A("col.pl1", "PL1 W", "PL1 W");
@@ -61,7 +62,6 @@ namespace XtuProfileSwitcher
             A("col.key", "Hotkey", "Phím tắt");
             A("row.inuse", "In use", "Đang dùng");
             A("row.custom", "custom", "tự tạo");
-            A("btn.apply", "Apply", "Áp dụng");
             A("btn.hotkey", "Set hotkey…", "Gán phím tắt…");
             A("btn.delete", "Delete", "Xoá");
 
@@ -84,7 +84,7 @@ namespace XtuProfileSwitcher
             // messages
             A("msg.applied", "Applied: PL1 {0} W · PL2 {1} W · {2} s", "Đã áp dụng: PL1 {0} W · PL2 {1} W · {2} s");
             A("msg.already", "Already in use", "Đang dùng sẵn");
-            A("msg.pick", "Pick a profile first.", "Hãy chọn một profile.");
+            A("msg.applying", "Applying {0}…", "Đang áp dụng {0}…");
             A("msg.failed", "Couldn't apply {0}. {1}", "Không áp dụng được {0}. {1}");
             A("msg.trayhint", "Still running in the tray. Right-click the icon to quit.", "Vẫn chạy ở khay. Chuột phải biểu tượng để thoát.");
             A("msg.noprofile", "Profile not found", "Không thấy profile");

@@ -7,9 +7,12 @@ Acer Predator Triton 500 SE (PT516-51s, i7-11800H, XTU 7.14.2.135, Windows 11).
 > interface and changes CPU power limits: use at your own risk, and test with a stress test first.
 > No Intel files are included; you need XTU installed.
 
-![The window, dark theme](docs/window-dark.png)
+![Profiles tab, dark theme](docs/window-dark.png)
+![Settings tab, dark theme](docs/settings-dark.png)
 
-The window follows the Windows light/dark setting (`docs/window-light.png` shows the light one).
+**Click a profile to apply it.** The "..." at the end of a row (or a right-click) opens the secondary
+actions: set a hotkey, and delete for profiles made in this tool. The readout on top stays visible on
+both tabs. The window follows the Windows light/dark setting (`docs/window-light.png` shows the light one).
 English is the default; the **EN · VI** switch in the top right changes the whole interface to Vietnamese
 and the choice is remembered.
 
@@ -49,7 +52,7 @@ On first run these are created (`Ctrl+Alt+...`, so they differ from XTU's own `C
 | PL55-60W | Ctrl+Alt+F2 |
 | Default (BIOS) | Ctrl+Alt+Home |
 
-Select a profile and press **Set hotkey…** to change or clear one. Settings live in
+Open the "..." menu of a profile and choose **Set hotkey…** to change or clear one. Settings live in
 `%LOCALAPPDATA%\XtuProfileSwitcher\settings.ini`. A hotkey needs Ctrl or Alt.
 
 **Do not reuse the same keys as XTU's own Hotkey-Profile Pairing.** XTU listens with a global keyboard
@@ -67,7 +70,7 @@ XTU already uses wins over a tool profile with the same name.
 
 ### Automatic switch by power source
 
-Turn on **Switch automatically by power source** and pick a profile for **When plugged in** and one for
+On the **Settings** tab, turn on **Switch automatically by power source** and pick a profile for **When plugged in** and one for
 **On battery** (or **Leave as is** to leave a case alone). The tool applies the matching profile
 
 - at start,
@@ -81,7 +84,7 @@ in and unplugging) were tried on a real laptop.
 
 ### Start with Windows
 
-Turn on **Start with Windows** in the window. It creates a scheduled task (`XtuProfileSwitcher`) that runs the
+Turn on **Start with Windows** on the Settings tab. It creates a scheduled task (`XtuProfileSwitcher`) that runs the
 tool elevated 15 seconds after you log on, with `--tray`, and also on battery. Turn it off to remove it.
 
 ## Command line (no window)
@@ -96,7 +99,8 @@ XtuProfileSwitcher.exe --tray              # start hidden in the tray
 
 `settings.ini` also takes `@lang` (`en` or `vi`) and `@theme` (`auto`, `light` or `dark`; `auto` follows
 Windows). To check the look without showing a window, `--snapshot FILE.png` draws it off-screen
-(`--lang vi`, `--theme light`, `--dialog hotkey|profile` and `--offline` change what is drawn).
+(`--lang vi`, `--theme light`, `--tab settings`, `--dialog hotkey|profile` and `--offline` change what is
+drawn; `--click NAME` clicks that row first, which really applies it, as a self-test).
 
 Exit codes: 0 ok, 1 failed, 2 profile not found. A log is kept in
 `%LOCALAPPDATA%\XtuProfileSwitcher\app.log`.

@@ -1,4 +1,8 @@
 // The main window and the tray icon. All window text comes from Loc; all colours from Theme.
+//
+// Layout: top bar, the readout (always visible), then two tabs.
+//   Profiles: the table; click a row to apply it, "..." for hotkey / delete.
+//   Settings: automatic switch by power source, start with Windows, system facts.
 
 using System;
 using System.Collections.Generic;
@@ -32,12 +36,9 @@ namespace XtuProfileSwitcher
 
         private readonly TopBar top = new TopBar();
         private readonly Readout readout = new Readout();
-        private readonly Label lblProfiles = new Label();
+        private readonly TabStrip tabs = new TabStrip();
         private readonly Btn btnNew = new Btn();
         private readonly ProfileTable table = new ProfileTable();
-        private readonly Btn btnApply = new Btn();
-        private readonly Btn btnHotkey = new Btn();
-        private readonly Btn btnDelete = new Btn();
         private readonly Label autoTitle = new Label();
         private readonly Label autoDesc = new Label();
         private readonly Switch swAuto = new Switch();
@@ -57,11 +58,17 @@ namespace XtuProfileSwitcher
         private readonly Dictionary<int, string> registered = new Dictionary<int, string>();
         private PowerLineStatus lastLine = PowerLineStatus.Unknown;
         private bool reallyExit, startHidden, busy, inited, suppress;
-        private int tick, ruleAuto, ruleFooter, statusY;
+        private int tick, ruleSettings, statusY;
         private bool statusError;
         private string comboKey = "";
 
         private Dictionary<string, string> hotkeys { get { return settings.Hotkeys; } }
+        private bool OnProfilesTab { get { return tabs.SelectedIndex == 0; } }
+
+        // Preview only (--snapshot --offline / --tab settings): draw a state that is hard to reach on demand.
+        public bool SimulateOffline;
+        public int PreviewTab;
+        public string PreviewClick;
 
         public MainForm(bool startHidden, EventWaitHandle showSignal, bool preview, AppSettings settings)
         {
@@ -76,33 +83,23 @@ namespace XtuProfileSwitcher
             ForeColor = Theme.Text;
             StartPosition = FormStartPosition.CenterScreen;
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-            int h = Math.Min(Ui.S(800), (int)(wa.Height * 0.92) - Ui.S(48));
-            ClientSize = new Size(Ui.S(640), Math.Max(Ui.S(640), h));
-            MinimumSize = SizeFromClientSize(new Size(Ui.S(600), Ui.S(640)));
+            int h = Math.Min(Ui.S(640), (int)(wa.Height * 0.92) - Ui.S(48));
+            ClientSize = new Size(Ui.S(640), Math.Max(Ui.S(520), h));
+            MinimumSize = SizeFromClientSize(new Size(Ui.S(600), Ui.S(520)));
 
             top.LanguageChosen += delegate (object s, LangEventArgs e) { SetLanguage(e.Lang); };
             Controls.Add(top);
             Controls.Add(readout);
 
-            StyleLabel(lblProfiles, true, 10.5f);
-            Controls.Add(lblProfiles);
+            tabs.SelectedChanged += delegate { ShowPage(); };
+            Controls.Add(tabs);
             btnNew.Kind = BtnKind.Quiet;
             btnNew.Click += delegate { AddProfile(); };
             Controls.Add(btnNew);
 
-            table.Activated += delegate { ApplySelected(); };
-            table.SelectedChanged += delegate { UpdateButtons(); };
+            table.Activated += delegate (object s, RowEventArgs e) { ApplyProfile((Profile)e.Row.Tag, false, null); };
+            table.MenuRequested += delegate (object s, RowEventArgs e) { ShowRowMenu(e.Row, e.Anchor); };
             Controls.Add(table);
-
-            btnApply.Kind = BtnKind.Primary;
-            btnApply.Click += delegate { ApplySelected(); };
-            Controls.Add(btnApply);
-            btnHotkey.Kind = BtnKind.Secondary;
-            btnHotkey.Click += delegate { EditHotkey(); };
-            Controls.Add(btnHotkey);
-            btnDelete.Kind = BtnKind.Quiet;
-            btnDelete.Click += delegate { DeleteProfile(); };
-            Controls.Add(btnDelete);
 
             StyleLabel(autoTitle, true, 10.5f);
             StyleLabel(autoDesc, false, 9.5f);
@@ -181,16 +178,16 @@ namespace XtuProfileSwitcher
             l.UseMnemonic = false;
         }
 
-        // ---- text and layout -----------------------------------------------------------------
+        // ---- text, pages and layout -------------------------------------------------------------
 
         private void ApplyTexts()
         {
             Text = "XTU Profile Switcher";
-            lblProfiles.Text = Loc.T("pr.title");
+            int keep = tabs.SelectedIndex;
+            tabs.Items.Clear();
+            tabs.Items.Add(Loc.T("tab.profiles"));
+            tabs.Items.Add(Loc.T("tab.settings"));
             btnNew.Text = "+  " + Loc.T("pr.new");
-            btnApply.Text = Loc.T("btn.apply");
-            btnHotkey.Text = Loc.T("btn.hotkey");
-            btnDelete.Text = Loc.T("btn.delete");
             autoTitle.Text = Loc.T("auto.title");
             autoDesc.Text = Loc.T("auto.desc");
             lblAc.Text = Loc.T("auto.ac");
@@ -199,9 +196,23 @@ namespace XtuProfileSwitcher
             suDesc.Text = Loc.T("su.desc");
             btnStartSvc.Text = Loc.T("btn.startsvc");
             comboKey = "";
+            tabs.Invalidate();
             top.Invalidate();
             table.Invalidate();
             readout.Invalidate();
+            ShowPage();
+        }
+
+        // Show the controls of the current tab only.
+        private void ShowPage()
+        {
+            bool prof = OnProfilesTab;
+            table.Visible = prof;
+            btnNew.Visible = prof;
+            foreach (Control c in new Control[] { autoTitle, autoDesc, lblAc, lblBat, swAuto, ddAc, ddBat, suTitle, suDesc, swStartup, lblFacts })
+                c.Visible = !prof;
+            btnStartSvc.Visible = !prof && last.ServiceState != "Running";
+            Invalidate();
         }
 
         private void Relayout()
@@ -212,44 +223,36 @@ namespace XtuProfileSwitcher
             top.SetBounds(0, Ui.S(8), W, Ui.S(48));
             int y = Ui.S(62);
             readout.SetBounds(0, y, W, Ui.S(134));
-            y += Ui.S(134) + Ui.S(12);
+            y += Ui.S(134) + Ui.S(6);
+            tabs.SetBounds(0, y, W, Ui.S(40));
+            btnNew.SetBounds(m + cw - Ui.S(160), y + Ui.S(4), Ui.S(160), Ui.S(30));
+            y += Ui.S(40);
 
-            // from the bottom up
-            int yb = H - Ui.S(14);
-            statusY = yb - Ui.S(24);
+            statusY = H - Ui.S(14) - Ui.S(24);
             statusLabel.SetBounds(m + Ui.S(16), statusY, cw - Ui.S(16), Ui.S(24));
-            yb = statusY - Ui.S(8);
+            int pageTop = y + Ui.S(10), pageBottom = statusY - Ui.S(8);
 
-            int footerTop = yb - Ui.S(84);
-            ruleFooter = footerTop;
-            suTitle.SetBounds(m, footerTop + Ui.S(12), cw - Ui.S(60), Ui.S(24));
-            suDesc.SetBounds(m, footerTop + Ui.S(36), cw - Ui.S(60), Ui.S(22));
-            swStartup.Location = new Point(m + cw - swStartup.Width, footerTop + Ui.S(14));
-            lblFacts.SetBounds(m, footerTop + Ui.S(58), cw - Ui.S(190), Ui.S(22));
-            btnStartSvc.SetBounds(m + cw - Ui.S(180), footerTop + Ui.S(52), Ui.S(180), Ui.S(30));
-            yb = footerTop;
+            // profiles tab
+            table.SetBounds(m, pageTop, cw, Math.Max(Ui.S(100), pageBottom - pageTop));
 
-            int autoTop = yb - Ui.S(150);
-            ruleAuto = autoTop;
-            autoTitle.SetBounds(m, autoTop + Ui.S(12), cw - Ui.S(60), Ui.S(24));
-            autoDesc.SetBounds(m, autoTop + Ui.S(36), cw - Ui.S(60), Ui.S(22));
-            swAuto.Location = new Point(m + cw - swAuto.Width, autoTop + Ui.S(14));
+            // settings tab
+            int a = pageTop + Ui.S(6);
+            autoTitle.SetBounds(m, a, cw - Ui.S(60), Ui.S(24));
+            autoDesc.SetBounds(m, a + Ui.S(24), cw - Ui.S(60), Ui.S(22));
+            swAuto.Location = new Point(m + cw - swAuto.Width, a + Ui.S(2));
             int ddW = Ui.S(260);
-            lblAc.SetBounds(m, autoTop + Ui.S(66), cw - ddW - Ui.S(12), Ui.S(34));
-            ddAc.SetBounds(m + cw - ddW, autoTop + Ui.S(66), ddW, Ui.S(34));
-            lblBat.SetBounds(m, autoTop + Ui.S(106), cw - ddW - Ui.S(12), Ui.S(34));
-            ddBat.SetBounds(m + cw - ddW, autoTop + Ui.S(106), ddW, Ui.S(34));
-            yb = autoTop - Ui.S(12);
+            lblAc.SetBounds(m, a + Ui.S(58), cw - ddW - Ui.S(12), Ui.S(34));
+            ddAc.SetBounds(m + cw - ddW, a + Ui.S(58), ddW, Ui.S(34));
+            lblBat.SetBounds(m, a + Ui.S(98), cw - ddW - Ui.S(12), Ui.S(34));
+            ddBat.SetBounds(m + cw - ddW, a + Ui.S(98), ddW, Ui.S(34));
 
-            int actionsTop = yb - Ui.S(34);
-            btnApply.SetBounds(m, actionsTop, Ui.S(110), Ui.S(34));
-            btnHotkey.SetBounds(m + Ui.S(120), actionsTop, Ui.S(150), Ui.S(34));
-            btnDelete.SetBounds(m + Ui.S(280), actionsTop, Ui.S(100), Ui.S(34));
-
-            lblProfiles.SetBounds(m, y, Ui.S(200), Ui.S(26));
-            btnNew.SetBounds(m + cw - Ui.S(160), y - Ui.S(3), Ui.S(160), Ui.S(32));
-            int tableTop = y + Ui.S(34);
-            table.SetBounds(m, tableTop, cw, Math.Max(Ui.S(100), actionsTop - Ui.S(8) - tableTop));
+            ruleSettings = a + Ui.S(152);
+            int s = ruleSettings + Ui.S(16);
+            suTitle.SetBounds(m, s, cw - Ui.S(60), Ui.S(24));
+            suDesc.SetBounds(m, s + Ui.S(24), cw - Ui.S(60), Ui.S(22));
+            swStartup.Location = new Point(m + cw - swStartup.Width, s + Ui.S(2));
+            lblFacts.SetBounds(m, s + Ui.S(64), cw - Ui.S(190), Ui.S(24));
+            btnStartSvc.SetBounds(m + cw - Ui.S(180), s + Ui.S(60), Ui.S(180), Ui.S(30));
 
             Invalidate();
         }
@@ -260,11 +263,8 @@ namespace XtuProfileSwitcher
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Theme.Ground);
             int m = Ui.S(28);
-            using (Pen line = new Pen(Theme.Line))
-            {
-                g.DrawLine(line, m, ruleAuto, ClientSize.Width - m, ruleAuto);
-                g.DrawLine(line, m, ruleFooter, ClientSize.Width - m, ruleFooter);
-            }
+            if (!OnProfilesTab)
+                using (Pen line = new Pen(Theme.Line)) g.DrawLine(line, m, ruleSettings, ClientSize.Width - m, ruleSettings);
             if (statusLabel.Text.Length > 0)
                 Ui.Dot(g, statusError ? Theme.Bad : Theme.Sub, m + Ui.S(4f), statusY + Ui.S(12f), Ui.S(7f));
         }
@@ -312,8 +312,14 @@ namespace XtuProfileSwitcher
             suppress = true;
             try { swStartup.Set(!preview && StartupTask.Exists()); } catch { }
             suppress = false;
+            if (preview) tabs.SelectedIndex = PreviewTab;
             RefreshAll();
-            if (preview) return;
+            if (preview)
+            {
+                // Self-test: click a row as a user would (this really applies it).
+                if (PreviewClick != null) table.TestClick(table.RowPoint(PreviewClick, false), MouseButtons.Left);
+                return;
+            }
             CheckPowerSource(false);   // apply the profile for the current power source once at start
             timer.Start();
         }
@@ -362,7 +368,7 @@ namespace XtuProfileSwitcher
             Log.Write((error ? "ERROR " : "INFO  ") + text);
         }
 
-        // ---- hotkeys --------------------------------------------------------------------------
+        // ---- hotkeys ----------------------------------------------------------------------------
 
         private void RegisterHotkeys()
         {
@@ -391,10 +397,20 @@ namespace XtuProfileSwitcher
             registered.Clear();
         }
 
-        private void EditHotkey()
+        private void ShowRowMenu(Row row, Point anchor)
         {
-            Row row = table.SelectedRow;
-            if (row == null) { Say(Loc.T("msg.pick"), true); return; }
+            ContextMenuStrip menu = Menus.Create();
+            menu.Items.Add(Menus.Item(Loc.T("btn.hotkey"), delegate { EditHotkey(row); }));
+            if (row.Custom)
+            {
+                menu.Items.Add(new ToolStripSeparator());
+                menu.Items.Add(Menus.Item(Loc.T("btn.delete"), delegate { DeleteProfile(row); }));
+            }
+            menu.Show(table, anchor);
+        }
+
+        private void EditHotkey(Row row)
+        {
             string current;
             hotkeys.TryGetValue(row.Name, out current);
 
@@ -433,7 +449,7 @@ namespace XtuProfileSwitcher
             Osd.Flash(Loc.T("msg.noprofile"), name, true);
         }
 
-        // ---- start with Windows ---------------------------------------------------------------
+        // ---- start with Windows -----------------------------------------------------------------
 
         private void OnStartupChanged()
         {
@@ -452,7 +468,7 @@ namespace XtuProfileSwitcher
             }
         }
 
-        // ---- refresh --------------------------------------------------------------------------
+        // ---- refresh ----------------------------------------------------------------------------
 
         private static string OnOff(string s) { return s == "On" ? Loc.T("on") : s == "Off" ? Loc.T("off") : "?"; }
 
@@ -460,9 +476,6 @@ namespace XtuProfileSwitcher
         {
             return s == PowerLineStatus.Online ? Loc.T("power.ac") : s == PowerLineStatus.Offline ? Loc.T("power.battery") : Loc.T("power.unknown");
         }
-
-        // Preview only (--snapshot --offline): draw the "can't reach XTU" state.
-        public bool SimulateOffline;
 
         private void RefreshAll()
         {
@@ -505,19 +518,10 @@ namespace XtuProfileSwitcher
             lblFacts.Text = last.Connected
                 ? Loc.T("facts.restore") + ": " + OnOff(last.RestoreOnBoot ? "On" : "Off") + "   ·   " + Loc.T("facts.fast") + ": " + OnOff(last.FastStartup)
                 : "";
-            btnStartSvc.Visible = !running;
+            btnStartSvc.Visible = !OnProfilesTab && !running;
 
             FillCombos();
-            UpdateButtons();
             RebuildTray(active);
-        }
-
-        private void UpdateButtons()
-        {
-            Row sel = table.SelectedRow;
-            btnApply.Enabled = last.Connected && sel != null;
-            btnHotkey.Enabled = sel != null;
-            btnDelete.Enabled = sel != null && sel.Custom;
         }
 
         private void RebuildTray(Profile active)
@@ -546,14 +550,7 @@ namespace XtuProfileSwitcher
             tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
         }
 
-        // ---- apply ----------------------------------------------------------------------------
-
-        private void ApplySelected()
-        {
-            Row row = table.SelectedRow;
-            if (row == null) { Say(Loc.T("msg.pick"), true); return; }
-            ApplyProfile((Profile)row.Tag, false, null);
-        }
+        // ---- apply ------------------------------------------------------------------------------
 
         // reason: non-null when the switch was automatic (e.g. "On battery"), shown in the notice.
         private void ApplyProfile(Profile p, bool notify, string reason)
@@ -564,6 +561,7 @@ namespace XtuProfileSwitcher
             {
                 try
                 {
+                    if (!notify) { Say(Loc.F("msg.applying", p.Name), false); statusLabel.Update(); }
                     if (!client.IsOpen) client.Connect();
                     string msg = client.Apply(p);
                     Say((reason != null ? reason + " · " : "") + p.Name + ": " + msg, false);
@@ -589,7 +587,7 @@ namespace XtuProfileSwitcher
             finally { busy = false; }
         }
 
-        // ---- profiles made in this tool -------------------------------------------------------
+        // ---- profiles made in this tool ---------------------------------------------------------
 
         private void AddProfile()
         {
@@ -602,15 +600,12 @@ namespace XtuProfileSwitcher
                 settings.Customs.Add(dlg.Result);
                 settings.Save();
                 RefreshAll();
-                table.Select(dlg.Result.Name);
                 Say(Loc.F("msg.created", dlg.Result.Name), false);
             }
         }
 
-        private void DeleteProfile()
+        private void DeleteProfile(Row row)
         {
-            Row row = table.SelectedRow;
-            if (row == null) { Say(Loc.T("msg.pick"), true); return; }
             if (!row.Custom) { Say(Loc.T("msg.onlycustom"), true); return; }
             if (MessageBox.Show(this, Loc.F("msg.confirmdel", row.Name), "XTU Profile Switcher",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
@@ -627,7 +622,7 @@ namespace XtuProfileSwitcher
             Say(Loc.F("msg.deleted", name), false);
         }
 
-        // ---- automatic switch by power source -------------------------------------------------
+        // ---- automatic switch by power source ---------------------------------------------------
 
         private string ComboValue(Dropdown d)
         {

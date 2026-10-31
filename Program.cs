@@ -654,6 +654,7 @@ namespace XtuProfileSwitcher
         private static int Run(string[] args)
         {
             string outFile = null, applyName = null, startup = null, snap = null, dialog = null, langArg = null, themeArg = null;
+            string tabArg = null, clickArg = null;
             bool status = false, listOnly = false, tray = false, offline = false;
             for (int i = 0; i < args.Length; i++)
             {
@@ -668,6 +669,8 @@ namespace XtuProfileSwitcher
                 else if (args[i] == "--lang" && i + 1 < args.Length) langArg = args[++i];
                 else if (args[i] == "--theme" && i + 1 < args.Length) themeArg = args[++i];
                 else if (args[i] == "--offline") offline = true;
+                else if (args[i] == "--tab" && i + 1 < args.Length) tabArg = args[++i];
+                else if (args[i] == "--click" && i + 1 < args.Length) clickArg = args[++i];
             }
 
             AppSettings settings = AppSettings.Load();
@@ -692,7 +695,9 @@ namespace XtuProfileSwitcher
                     using (MainForm f = new MainForm(false, null, true, settings))
                     {
                         f.SimulateOffline = offline;
-                        Ui.Snapshot(f, snap, new Size(Ui.S(640), Ui.S(800)));
+                        f.PreviewTab = tabArg == "settings" ? 1 : 0;
+                        f.PreviewClick = clickArg;
+                        Ui.Snapshot(f, snap, new Size(Ui.S(640), Ui.S(640)));
                     }
                 return 0;
             }
