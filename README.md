@@ -14,6 +14,8 @@ Acer Predator Triton 500 SE (PT516-51s, i7-11800H, XTU 7.14.2.135, Windows 11).
 - works out which saved XTU profile those values correspond to (XTU does not store "active profile")
 - switches profiles (only PL1, PL2, PL2 enable and the time window are changed)
 - global hotkeys per profile, with an on-screen pop-up showing the result
+- profiles you create in the tool itself (name, PL1, PL2, time window), no need to use XTU's UI
+- optional automatic switch between two profiles when the power source changes (plugged in / battery)
 - optional "start with Windows", hidden in the tray
 
 ## Build
@@ -49,6 +51,28 @@ hook (not by registering the hotkey), so both programs would react to the same k
 The tool refuses a combination that XTU currently uses; you can also turn XTU's pairing off in its UI.
 
 The pop-up is a normal top-most window, so it will not show over an exclusive-fullscreen game.
+
+### Your own profiles
+
+"Thêm profile…" creates a profile (defaults to 35 W / 40 W / 56 s) that is stored in
+`settings.ini` and shown in the list as "tự tạo". It can have a hotkey and be used in the automatic
+switch like any XTU profile. Only profiles created in this tool can be deleted from it. A name that
+XTU already uses wins over a tool profile with the same name.
+
+### Automatic switch by power source
+
+Tick "Tự đổi profile khi đổi nguồn" and pick a profile for "Khi cắm sạc" and one for "Khi dùng pin"
+(or "(không đổi)" to leave a case alone). The tool applies the matching profile
+
+- at start,
+- when the power source changes (power event, with a 5 s poll as a backup),
+- a few seconds after the PC wakes from sleep, because power limits can fall back to firmware
+  defaults around sleep.
+
+A manual change (hotkey, tray, window) stays until the power source changes again. Changing a drop-down
+only applies immediately if it is the one for the source currently in use. The plugged-in branch was
+tested on a real machine; the on-battery branch uses the same code path but was not tested by actually
+unplugging.
 
 ### Start with Windows
 
