@@ -76,9 +76,8 @@ Turn on **Switch automatically by power source** and pick a profile for **When p
   defaults around sleep.
 
 A manual change (hotkey, tray, window) stays until the power source changes again. Changing a drop-down
-only applies immediately if it is the one for the source currently in use. The plugged-in branch was
-tested on a real machine; the on-battery branch uses the same code path but was not tested by actually
-unplugging.
+only applies immediately if it is the one for the source currently in use. Both directions (plugging
+in and unplugging) were tried on a real laptop.
 
 ### Start with Windows
 
