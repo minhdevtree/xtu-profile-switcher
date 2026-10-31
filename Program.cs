@@ -4,7 +4,9 @@
 //   * shows whether the XTU service is running and reachable
 //   * shows the power limits that are really active right now (read from the service)
 //   * works out which saved XTU profile those values correspond to
-//   * applies the power-limit part of a saved profile (PL1, PL2, PL2 enable, time window)
+//   * applies the power-limit part of a saved profile (PL1, PL2, PL2 enable, time window),
+//     from the window, the tray menu or a global hotkey, with an on-screen notification
+//   * can start with Windows (hidden in the tray) through a scheduled task
 //
 // It talks to the XTU service over its WCF named pipe, using Intel's own contract
 // assemblies from the XTU install folder. That interface is internal and unsupported,
@@ -14,14 +16,19 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.ServiceModel;
 using System.ServiceModel.Description;
 using System.ServiceProcess;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Windows.Forms;
 using System.Xml;
 using Microsoft.Win32;
@@ -31,20 +38,27 @@ namespace XtuProfileSwitcher
     internal static class Paths
     {
         public const string XtuDir = @"C:\Program Files\Intel\Intel(R) Extreme Tuning Utility\Drivers";
-        public const string ProfilesXml = @"C:\ProgramData\Intel\Intel Extreme Tuning Utility\Profiles.xml";
+        public const string XtuData = @"C:\ProgramData\Intel\Intel Extreme Tuning Utility";
+        public const string ProfilesXml = XtuData + @"\Profiles.xml";
+        public const string XtuUiSettings = XtuData + @"\uisettings.xml";
+        public const string XtuHotkeys = XtuData + @"\xtu.hotkey.settings";
         public const string ServiceName = "XTU3SERVICE";
         public const string PipeUri = "net.pipe://localhost/ExtremeTuningUtility/Tuning";
+        public const string TaskName = "XtuProfileSwitcher";
 
-        public static string LogFile
+        public static string DataDir
         {
             get
             {
                 string dir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "XtuProfileSwitcher");
                 Directory.CreateDirectory(dir);
-                return Path.Combine(dir, "app.log");
+                return dir;
             }
         }
+
+        public static string LogFile { get { return Path.Combine(DataDir, "app.log"); } }
+        public static string SettingsFile { get { return Path.Combine(DataDir, "settings.ini"); } }
     }
 
     internal static class Ids
@@ -117,6 +131,196 @@ namespace XtuProfileSwitcher
         }
     }
 
+    // A global hotkey: modifiers + one key.
+    internal sealed class Hotkey
+    {
+        public const uint Alt = 1, Ctrl = 2, Shift = 4, NoRepeat = 0x4000;
+
+        public uint Mods;
+        public Keys Key;
+
+        public override string ToString()
+        {
+            List<string> parts = new List<string>();
+            if ((Mods & Ctrl) != 0) parts.Add("Ctrl");
+            if ((Mods & Alt) != 0) parts.Add("Alt");
+            if ((Mods & Shift) != 0) parts.Add("Shift");
+            parts.Add(Key.ToString());
+            return string.Join("+", parts.ToArray());
+        }
+
+        public string Canonical() { return ToString().ToUpperInvariant(); }
+
+        public static Hotkey Parse(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            string[] tokens = text.Split('+');
+            Hotkey h = new Hotkey();
+            bool haveKey = false;
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                string t = tokens[i].Trim();
+                string u = t.ToUpperInvariant();
+                if (u == "CTRL" || u == "CONTROL") h.Mods |= Ctrl;
+                else if (u == "ALT") h.Mods |= Alt;
+                else if (u == "SHIFT") h.Mods |= Shift;
+                else if (i == tokens.Length - 1)
+                {
+                    try { h.Key = (Keys)Enum.Parse(typeof(Keys), t, true); haveKey = true; }
+                    catch { return null; }
+                }
+                else return null;
+            }
+            // Require Ctrl or Alt so a hotkey never steals plain typing.
+            if (!haveKey || (h.Mods & (Ctrl | Alt)) == 0) return null;
+            return h;
+        }
+
+        // Combos XTU's own hotkey pairing listens for (it uses a global keyboard hook, so it
+        // would act on the very same keys at the same time as this tool).
+        public static HashSet<string> XtuCombos()
+        {
+            HashSet<string> set = new HashSet<string>();
+            try
+            {
+                if (!XtuPairingOn()) return set;
+                string s = Encoding.GetEncoding(28591).GetString(File.ReadAllBytes(Paths.XtuHotkeys));
+                foreach (Match m in Regex.Matches(s, @"(?:(?:CONTROL|CTRL|SHIFT|ALT)\+)+[A-Za-z0-9]+"))
+                {
+                    Hotkey h = Parse(m.Value);
+                    if (h != null) set.Add(h.Canonical());
+                }
+            }
+            catch { }
+            return set;
+        }
+
+        public static bool XtuPairingOn()
+        {
+            try
+            {
+                XmlDocument doc = new XmlDocument();
+                doc.Load(Paths.XtuUiSettings);
+                foreach (XmlNode n in doc.SelectNodes("//NameValuePair"))
+                {
+                    XmlNode name = n.SelectSingleNode("Name");
+                    XmlNode val = n.SelectSingleNode("Value");
+                    if (name != null && val != null && name.InnerText == "HotkeyPairingOn")
+                        return string.Equals(val.InnerText, "True", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch { }
+            return false;
+        }
+    }
+
+    // Per-user settings: profile name -> hotkey text, stored as "name<TAB>hotkey" lines.
+    internal static class Settings
+    {
+        public static Dictionary<string, string> LoadHotkeys()
+        {
+            Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string file = Paths.SettingsFile;
+            if (!File.Exists(file))
+            {
+                // First run: mirror the keys already used in XTU, but on Ctrl+Alt so they do not clash with XTU's.
+                map["PL64-90W"] = "Ctrl+Alt+F1";
+                map["PL55-60W"] = "Ctrl+Alt+F2";
+                map["Default (BIOS)"] = "Ctrl+Alt+Home";
+                SaveHotkeys(map);
+                return map;
+            }
+            foreach (string line in File.ReadAllLines(file, Encoding.UTF8))
+            {
+                int tab = line.IndexOf('\t');
+                if (tab <= 0) continue;
+                string name = line.Substring(0, tab);
+                string key = line.Substring(tab + 1).Trim();
+                if (key.Length > 0) map[name] = key;
+            }
+            return map;
+        }
+
+        public static void SaveHotkeys(Dictionary<string, string> map)
+        {
+            List<string> lines = new List<string>();
+            foreach (KeyValuePair<string, string> kv in map)
+                if (!string.IsNullOrEmpty(kv.Value)) lines.Add(kv.Key + "\t" + kv.Value);
+            File.WriteAllLines(Paths.SettingsFile, lines.ToArray(), Encoding.UTF8);
+        }
+    }
+
+    // "Start with Windows" through a scheduled task that runs elevated at logon, without any prompt.
+    internal static class StartupTask
+    {
+        private static int Run(string args, out string output)
+        {
+            ProcessStartInfo psi = new ProcessStartInfo("schtasks.exe", args);
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            using (Process p = Process.Start(psi))
+            {
+                output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+                p.WaitForExit(20000);
+                return p.ExitCode;
+            }
+        }
+
+        public static bool Exists()
+        {
+            string o;
+            return Run("/Query /TN \"" + Paths.TaskName + "\"", out o) == 0;
+        }
+
+        public static void Enable()
+        {
+            string user = WindowsIdentity.GetCurrent().Name;
+            string exe = Application.ExecutablePath;
+            string xml =
+                "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n" +
+                "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\r\n" +
+                "  <RegistrationInfo><Description>Start XTU Profile Switcher in the tray at logon.</Description></RegistrationInfo>\r\n" +
+                "  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + Esc(user) + "</UserId><Delay>PT15S</Delay></LogonTrigger></Triggers>\r\n" +
+                "  <Principals><Principal id=\"Author\"><UserId>" + Esc(user) + "</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>\r\n" +
+                "  <Settings>\r\n" +
+                "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\r\n" +
+                "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\r\n" +
+                "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\r\n" +
+                "    <AllowHardTerminate>true</AllowHardTerminate>\r\n" +
+                "    <StartWhenAvailable>true</StartWhenAvailable>\r\n" +
+                "    <AllowStartOnDemand>true</AllowStartOnDemand>\r\n" +
+                "    <Enabled>true</Enabled>\r\n" +
+                "    <Hidden>false</Hidden>\r\n" +
+                "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\r\n" +
+                "    <Priority>7</Priority>\r\n" +
+                "  </Settings>\r\n" +
+                "  <Actions Context=\"Author\"><Exec><Command>" + Esc(exe) + "</Command><Arguments>--tray</Arguments>" +
+                "<WorkingDirectory>" + Esc(Path.GetDirectoryName(exe)) + "</WorkingDirectory></Exec></Actions>\r\n" +
+                "</Task>\r\n";
+
+            string tmp = Path.Combine(Path.GetTempPath(), "xtu-switcher-task-" + Guid.NewGuid().ToString("N") + ".xml");
+            File.WriteAllText(tmp, xml, Encoding.Unicode);
+            try
+            {
+                string o;
+                int code = Run("/Create /TN \"" + Paths.TaskName + "\" /XML \"" + tmp + "\" /F", out o);
+                if (code != 0) throw new InvalidOperationException("schtasks: " + o.Trim());
+            }
+            finally { try { File.Delete(tmp); } catch { } }
+        }
+
+        public static void Disable()
+        {
+            string o;
+            int code = Run("/Delete /TN \"" + Paths.TaskName + "\" /F", out o);
+            if (code != 0 && Exists()) throw new InvalidOperationException("schtasks: " + o.Trim());
+        }
+
+        private static string Esc(string s) { return System.Security.SecurityElement.Escape(s); }
+    }
+
     // Thin wrapper around the XTU tuning pipe.
     internal sealed class XtuClient : IDisposable
     {
@@ -185,6 +389,7 @@ namespace XtuProfileSwitcher
         public IronCity.Core.XtuTuningControl Control(uint id) { return Ch.GetControl(id); }
         public bool RestoreOnBoot() { return Ch.GetDoRestoreUserValuesOnBoot(); }
 
+        // Returns a short result text; throws on any problem.
         public string Apply(Profile p)
         {
             Validate(p);
@@ -346,15 +551,16 @@ namespace XtuProfileSwitcher
             {
                 if (!client.IsOpen) client.Connect();
                 client.RefreshFromHardware();
-                s.Pl1 = client.Active(Ids.Pl1);
-                s.Pl2 = client.Active(Ids.Pl2);
-                s.Pl2Enable = client.Active(Ids.Pl2Enable) != 0m;
-                s.Window = client.Active(Ids.Window);
 
+                // One record per control; each carries both the live and the default value.
                 IronCity.Core.XtuTuningControl c1 = client.Control(Ids.Pl1);
                 IronCity.Core.XtuTuningControl c2 = client.Control(Ids.Pl2);
                 IronCity.Core.XtuTuningControl ce = client.Control(Ids.Pl2Enable);
                 IronCity.Core.XtuTuningControl cw = client.Control(Ids.Window);
+                s.Pl1 = c1.ActiveValue;
+                s.Pl2 = c2.ActiveValue;
+                s.Pl2Enable = ce.ActiveValue != 0m;
+                s.Window = cw.ActiveValue;
                 s.DefPl1 = c1.DefaultValue;
                 s.DefPl2 = c2.DefaultValue;
                 s.DefPl2Enable = ce.DefaultValue != 0m;
@@ -379,12 +585,163 @@ namespace XtuProfileSwitcher
         }
     }
 
+    // Small borderless, non-activating pop-up that shows for a couple of seconds.
+    internal sealed class Osd : Form
+    {
+        private static Osd current;
+        private readonly System.Windows.Forms.Timer life = new System.Windows.Forms.Timer();
+
+        public static void Flash(string title, string detail, bool error)
+        {
+            try
+            {
+                if (current != null && !current.IsDisposed) current.Close();
+                current = new Osd(title, detail, error);
+                current.Show();
+            }
+            catch (Exception ex) { Log.Write("OSD failed: " + ex.Message); }
+        }
+
+        private Osd(string title, string detail, bool error)
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            TopMost = true;
+            StartPosition = FormStartPosition.Manual;
+            BackColor = error ? Color.FromArgb(120, 28, 28) : Color.FromArgb(32, 36, 44);
+            Opacity = 0.94;
+            Size = new Size(440, 78);
+
+            Label t = new Label();
+            t.Text = title;
+            t.ForeColor = Color.White;
+            t.Font = new Font("Segoe UI Semibold", 13f);
+            t.AutoSize = false;
+            t.SetBounds(16, 8, 408, 30);
+            Controls.Add(t);
+
+            Label d = new Label();
+            d.Text = detail;
+            d.ForeColor = Color.FromArgb(205, 210, 220);
+            d.Font = new Font("Segoe UI", 10f);
+            d.AutoSize = false;
+            d.SetBounds(16, 40, 408, 30);
+            Controls.Add(d);
+
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            Location = new Point(wa.Left + (wa.Width - Width) / 2, wa.Bottom - Height - 60);
+
+            life.Interval = 2600;
+            life.Tick += delegate { life.Stop(); Close(); };
+            Shown += delegate { life.Start(); };
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                // WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT (click-through)
+                cp.ExStyle |= 0x08000000 | 0x00000080 | 0x00000020;
+                return cp;
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) life.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+
+    // Dialog that records a key combination.
+    internal sealed class HotkeyDialog : Form
+    {
+        private readonly Label shown = new Label();
+        public string Result;   // null = unchanged, "" = cleared, otherwise hotkey text
+
+        public HotkeyDialog(string profileName, string current)
+        {
+            Text = "Phím tắt – " + profileName;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterParent;
+            ClientSize = new Size(380, 150);
+            Font = new Font("Segoe UI", 9.5f);
+
+            Label hint = new Label();
+            hint.Text = "Nhấn tổ hợp phím mới (cần Ctrl hoặc Alt):";
+            hint.AutoSize = true;
+            hint.Location = new Point(16, 14);
+            Controls.Add(hint);
+
+            shown.Text = string.IsNullOrEmpty(current) ? "(chưa gán)" : current;
+            shown.Font = new Font("Segoe UI Semibold", 13f);
+            shown.BorderStyle = BorderStyle.FixedSingle;
+            shown.TextAlign = ContentAlignment.MiddleCenter;
+            shown.SetBounds(16, 42, 348, 40);
+            Controls.Add(shown);
+
+            Button ok = new Button();
+            ok.Text = "Lưu";
+            ok.DialogResult = DialogResult.OK;
+            ok.SetBounds(16, 100, 90, 32);
+            Controls.Add(ok);
+
+            Button clear = new Button();
+            clear.Text = "Xoá phím";
+            clear.SetBounds(116, 100, 100, 32);
+            clear.Click += delegate { Result = ""; shown.Text = "(chưa gán)"; };
+            Controls.Add(clear);
+
+            Button cancel = new Button();
+            cancel.Text = "Huỷ";
+            cancel.DialogResult = DialogResult.Cancel;
+            cancel.SetBounds(274, 100, 90, 32);
+            Controls.Add(cancel);
+
+            AcceptButton = ok;
+            CancelButton = cancel;
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            Keys key = keyData & Keys.KeyCode;
+            if (key == Keys.ControlKey || key == Keys.ShiftKey || key == Keys.Menu || key == Keys.None)
+                return base.ProcessCmdKey(ref msg, keyData);
+            if (key == Keys.Escape || key == Keys.Enter || key == Keys.Tab)
+                return base.ProcessCmdKey(ref msg, keyData);
+
+            Hotkey h = new Hotkey();
+            h.Key = key;
+            if ((keyData & Keys.Control) != 0) h.Mods |= Hotkey.Ctrl;
+            if ((keyData & Keys.Alt) != 0) h.Mods |= Hotkey.Alt;
+            if ((keyData & Keys.Shift) != 0) h.Mods |= Hotkey.Shift;
+            if ((h.Mods & (Hotkey.Ctrl | Hotkey.Alt)) == 0) return true;   // ignore until Ctrl/Alt is held
+
+            Result = h.ToString();
+            shown.Text = Result;
+            return true;
+        }
+    }
+
     internal sealed class MainForm : Form
     {
+        private const int WmHotkey = 0x0312;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
         private readonly XtuClient client = new XtuClient();
         private readonly NotifyIcon tray = new NotifyIcon();
         private readonly ContextMenuStrip trayMenu = new ContextMenuStrip();
-        private readonly Timer timer = new Timer();
+        private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
 
         private readonly Label lblService = new Label();
         private readonly Label lblPipe = new Label();
@@ -394,21 +751,31 @@ namespace XtuProfileSwitcher
         private readonly Label lblActive = new Label();
         private readonly ListView list = new ListView();
         private readonly Button btnApply = new Button();
+        private readonly Button btnHotkey = new Button();
         private readonly Button btnRefresh = new Button();
         private readonly Button btnStart = new Button();
+        private readonly CheckBox chkStartup = new CheckBox();
         private readonly Label status = new Label();
 
         private List<Profile> profiles = new List<Profile>();
         private Snapshot last = new Snapshot();
+        private Dictionary<string, string> hotkeys = Settings.LoadHotkeys();
+        private readonly Dictionary<int, string> registered = new Dictionary<int, string>();
         private bool reallyExit;
+        private bool startHidden;
+        private bool busy;
+        private bool suppressStartupEvent;
+        private int tick;
 
-        public MainForm()
+        public MainForm(bool startHidden, EventWaitHandle showSignal)
         {
+            this.startHidden = startHidden;
+
             Text = "XTU Profile Switcher";
-            ClientSize = new Size(560, 520);
+            ClientSize = new Size(560, 570);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9.5f);
-            MinimumSize = new Size(560, 520);
+            MinimumSize = new Size(560, 570);
 
             Label title = new Label();
             title.Text = "XTU Profile Switcher";
@@ -441,11 +808,12 @@ namespace XtuProfileSwitcher
             list.FullRowSelect = true;
             list.MultiSelect = false;
             list.HideSelection = false;
-            list.Columns.Add("Profile", 170);
-            list.Columns.Add("PL1 (W)", 70);
+            list.Columns.Add("Profile", 140);
+            list.Columns.Add("PL1 (W)", 60);
             list.Columns.Add("PL2 (W)", 70);
-            list.Columns.Add("Window (s)", 80);
-            list.Columns.Add("Trạng thái", 110);
+            list.Columns.Add("Window (s)", 75);
+            list.Columns.Add("Phím tắt", 100);
+            list.Columns.Add("Trạng thái", 80);
             list.DoubleClick += delegate { ApplySelected(); };
             Controls.Add(list);
 
@@ -455,19 +823,32 @@ namespace XtuProfileSwitcher
             btnApply.Click += delegate { ApplySelected(); };
             Controls.Add(btnApply);
 
+            btnHotkey.Text = "Gán phím tắt…";
+            btnHotkey.SetBounds(226, 432, 140, 32);
+            btnHotkey.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            btnHotkey.Click += delegate { EditHotkey(); };
+            Controls.Add(btnHotkey);
+
             btnRefresh.Text = "Làm mới";
-            btnRefresh.SetBounds(226, 432, 100, 32);
+            btnRefresh.SetBounds(376, 432, 100, 32);
             btnRefresh.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             btnRefresh.Click += delegate { RefreshAll(); };
             Controls.Add(btnRefresh);
 
             btnStart.Text = "Khởi động dịch vụ";
-            btnStart.SetBounds(336, 432, 140, 32);
+            btnStart.SetBounds(16, 472, 160, 32);
             btnStart.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             btnStart.Click += delegate { StartService(); };
             Controls.Add(btnStart);
 
-            status.SetBounds(16, 474, 528, 36);
+            chkStartup.Text = "Mở cùng Windows (chạy ẩn ở khay)";
+            chkStartup.AutoSize = true;
+            chkStartup.Location = new Point(190, 478);
+            chkStartup.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            chkStartup.CheckedChanged += OnStartupChanged;
+            Controls.Add(chkStartup);
+
+            status.SetBounds(16, 514, 528, 46);
             status.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             status.ForeColor = Color.DimGray;
             Controls.Add(status);
@@ -477,12 +858,74 @@ namespace XtuProfileSwitcher
             tray.ContextMenuStrip = trayMenu;
             tray.DoubleClick += delegate { ShowWindow(); };
 
-            timer.Interval = 3000;
-            timer.Tick += delegate { RefreshAll(); };
+            timer.Interval = 5000;
+            timer.Tick += delegate
+            {
+                // Refresh less often while hidden in the tray.
+                tick++;
+                if (Visible || tick % 3 == 0) RefreshAll();
+            };
 
-            Load += delegate { RefreshAll(); timer.Start(); };
+            // Load does not fire when the window starts hidden in the tray, so initialise explicitly.
+            Load += delegate { Init(); };
             FormClosing += OnFormClosing;
             Resize += delegate { if (WindowState == FormWindowState.Minimized) Hide(); };
+
+            if (showSignal != null)
+            {
+                ThreadPool.RegisterWaitForSingleObject(showSignal, delegate
+                {
+                    try { if (IsHandleCreated) BeginInvoke(new Action(ShowWindow)); } catch { }
+                }, null, -1, false);
+            }
+        }
+
+        private bool inited;
+
+        private void Init()
+        {
+            if (inited) return;
+            inited = true;
+            suppressStartupEvent = true;
+            try { chkStartup.Checked = StartupTask.Exists(); } catch { }
+            suppressStartupEvent = false;
+            RefreshAll();
+            timer.Start();
+        }
+
+        // Start hidden in the tray when asked to, without flashing a window.
+        protected override void SetVisibleCore(bool value)
+        {
+            if (startHidden)
+            {
+                value = false;
+                if (!IsHandleCreated) CreateHandle();
+                Init();
+            }
+            base.SetVisibleCore(value);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            RegisterHotkeys();
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            UnregisterHotkeys();
+            base.OnHandleDestroyed(e);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WmHotkey)
+            {
+                string name;
+                if (registered.TryGetValue(m.WParam.ToInt32(), out name)) ApplyByName(name);
+                return;
+            }
+            base.WndProc(ref m);
         }
 
         private static void AddRow(GroupBox box, string caption, Label value, int y)
@@ -501,9 +944,11 @@ namespace XtuProfileSwitcher
 
         private void ShowWindow()
         {
+            startHidden = false;
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
+            RefreshAll();
         }
 
         private void OnFormClosing(object sender, FormClosingEventArgs e)
@@ -512,7 +957,7 @@ namespace XtuProfileSwitcher
             {
                 e.Cancel = true;
                 Hide();
-                tray.ShowBalloonTip(2000, "XTU Profile Switcher", "Vẫn chạy ở khay hệ thống. Chuột phải vào biểu tượng để thoát.", ToolTipIcon.Info);
+                Osd.Flash("XTU Profile Switcher", "Vẫn chạy ở khay hệ thống (chuột phải biểu tượng để thoát).", false);
                 return;
             }
             timer.Stop();
@@ -526,6 +971,104 @@ namespace XtuProfileSwitcher
             status.ForeColor = error ? Color.Firebrick : Color.DimGray;
             Log.Write((error ? "ERROR " : "INFO  ") + text);
         }
+
+        // ---- hotkeys ------------------------------------------------------------------
+
+        private void RegisterHotkeys()
+        {
+            UnregisterHotkeys();
+            List<string> failed = new List<string>();
+            int id = 1;
+            foreach (KeyValuePair<string, string> kv in hotkeys)
+            {
+                Hotkey h = Hotkey.Parse(kv.Value);
+                if (h == null) { failed.Add(kv.Key + " (" + kv.Value + ")"); continue; }
+                if (RegisterHotKey(Handle, id, h.Mods | Hotkey.NoRepeat, (uint)h.Key))
+                {
+                    registered[id] = kv.Key;
+                    Log.Write("hotkey " + h + " -> " + kv.Key);
+                    id++;
+                }
+                else failed.Add(kv.Key + " (" + h + ")");
+            }
+            if (failed.Count > 0)
+                Say("Không đăng ký được phím tắt (đã bị ứng dụng khác dùng?): " + string.Join(", ", failed.ToArray()), true);
+        }
+
+        private void UnregisterHotkeys()
+        {
+            if (!IsHandleCreated) return;
+            foreach (int id in registered.Keys) UnregisterHotKey(Handle, id);
+            registered.Clear();
+        }
+
+        private void EditHotkey()
+        {
+            if (list.SelectedItems.Count == 0) { Say("Chọn một profile trong danh sách trước.", true); return; }
+            Profile p = (Profile)list.SelectedItems[0].Tag;
+            string current;
+            hotkeys.TryGetValue(p.Name, out current);
+
+            using (HotkeyDialog dlg = new HotkeyDialog(p.Name, current))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Result == null) return;
+
+                string text = dlg.Result;
+                if (text.Length > 0)
+                {
+                    Hotkey h = Hotkey.Parse(text);
+                    if (h == null) { Say("Tổ hợp phím không hợp lệ (cần Ctrl hoặc Alt).", true); return; }
+
+                    foreach (KeyValuePair<string, string> kv in hotkeys)
+                    {
+                        Hotkey other = Hotkey.Parse(kv.Value);
+                        if (other != null && kv.Key != p.Name && other.Canonical() == h.Canonical())
+                        { Say("Tổ hợp " + h + " đã gán cho profile \"" + kv.Key + "\".", true); return; }
+                    }
+                    if (Hotkey.XtuCombos().Contains(h.Canonical()))
+                    {
+                        Say("XTU cũng đang bắt tổ hợp " + h + " (Hotkey-Profile Pairing). Nó sẽ tự áp profile cùng lúc, "
+                            + "không có thông báo. Hãy chọn tổ hợp khác hoặc tắt tính năng đó trong XTU.", true);
+                        return;
+                    }
+                    text = h.ToString();
+                }
+
+                if (text.Length == 0) hotkeys.Remove(p.Name); else hotkeys[p.Name] = text;
+                Settings.SaveHotkeys(hotkeys);
+                RegisterHotkeys();
+                RefreshAll();
+                Say(text.Length == 0 ? "Đã xoá phím tắt của " + p.Name + "." : "Đã gán " + text + " cho " + p.Name + ".", false);
+            }
+        }
+
+        private void ApplyByName(string name)
+        {
+            foreach (Profile p in profiles)
+                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) { ApplyProfile(p, true); return; }
+            Osd.Flash("Không tìm thấy profile", name, true);
+        }
+
+        // ---- startup task -------------------------------------------------------------
+
+        private void OnStartupChanged(object sender, EventArgs e)
+        {
+            if (suppressStartupEvent) return;
+            try
+            {
+                if (chkStartup.Checked) { StartupTask.Enable(); Say("Đã bật: mở cùng Windows (chạy ẩn ở khay, trễ 15 giây sau khi đăng nhập).", false); }
+                else { StartupTask.Disable(); Say("Đã tắt mở cùng Windows.", false); }
+            }
+            catch (Exception ex)
+            {
+                Say("Không đổi được tác vụ khởi động: " + ex.Message, true);
+                suppressStartupEvent = true;
+                try { chkStartup.Checked = StartupTask.Exists(); } catch { }
+                suppressStartupEvent = false;
+            }
+        }
+
+        // ---- refresh / apply ----------------------------------------------------------
 
         private void RefreshAll()
         {
@@ -560,10 +1103,13 @@ namespace XtuProfileSwitcher
             list.Items.Clear();
             foreach (Profile p in profiles)
             {
+                string hk;
+                hotkeys.TryGetValue(p.Name, out hk);
                 ListViewItem item = new ListViewItem(p.Name);
                 item.SubItems.Add(p.Pl1.ToString("0.###"));
                 item.SubItems.Add(p.Pl2.ToString("0.###") + (p.Pl2Enable ? "" : " (tắt)"));
                 item.SubItems.Add(p.Window.ToString("0.###"));
+                item.SubItems.Add(hk ?? "");
                 item.SubItems.Add(p == active ? "ĐANG DÙNG" : "");
                 item.Tag = p;
                 if (p == active) item.Font = new Font(list.Font, FontStyle.Bold);
@@ -588,7 +1134,10 @@ namespace XtuProfileSwitcher
             foreach (Profile p in profiles)
             {
                 Profile captured = p;
-                ToolStripMenuItem mi = new ToolStripMenuItem(p.Name + "   (" + p.Pl1.ToString("0.###") + "/" + p.Pl2.ToString("0.###") + " W)");
+                string hk;
+                hotkeys.TryGetValue(p.Name, out hk);
+                ToolStripMenuItem mi = new ToolStripMenuItem(p.Name + "   (" + p.Pl1.ToString("0.###") + "/" + p.Pl2.ToString("0.###") + " W)"
+                    + (string.IsNullOrEmpty(hk) ? "" : "   " + hk));
                 mi.Checked = p == active;
                 mi.Click += delegate { ApplyProfile(captured, true); };
                 trayMenu.Items.Add(mi);
@@ -613,22 +1162,35 @@ namespace XtuProfileSwitcher
             ApplyProfile((Profile)list.SelectedItems[0].Tag, false);
         }
 
-        private void ApplyProfile(Profile p, bool fromTray)
+        private void ApplyProfile(Profile p, bool notify)
         {
+            if (busy) return;
+            busy = true;
             try
             {
-                if (!client.IsOpen) client.Connect();
-                string msg = client.Apply(p);
-                Say("[" + p.Name + "] " + msg, false);
-                if (fromTray) tray.ShowBalloonTip(2000, "XTU Profile Switcher", p.Name + ": " + msg, ToolTipIcon.Info);
+                try
+                {
+                    if (!client.IsOpen) client.Connect();
+                    string msg = client.Apply(p);
+                    Say("[" + p.Name + "] " + msg, false);
+                    RefreshAll();
+                    if (notify)
+                    {
+                        string values = last.Connected
+                            ? string.Format("PL1 {0:0.###} W · PL2 {1:0.###} W · {2:0.###} s", last.Pl1, last.Pl2, last.Window)
+                            : msg;
+                        Osd.Flash(p.Name, msg.StartsWith("Đã ở sẵn") ? "Đã ở sẵn · " + values : values, false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    client.Close();
+                    Say("Không áp dụng được [" + p.Name + "]: " + ex.Message, true);
+                    RefreshAll();
+                    if (notify) Osd.Flash("Không áp dụng được " + p.Name, Shorten(ex.Message), true);
+                }
             }
-            catch (Exception ex)
-            {
-                client.Close();
-                Say("Không áp dụng được [" + p.Name + "]: " + ex.Message, true);
-                if (fromTray) tray.ShowBalloonTip(3000, "XTU Profile Switcher", ex.Message, ToolTipIcon.Error);
-            }
-            RefreshAll();
+            finally { busy = false; }
         }
 
         private void StartService()
@@ -666,36 +1228,64 @@ namespace XtuProfileSwitcher
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static int Run(string[] args)
         {
-            string outFile = null, applyName = null;
-            bool status = false, listOnly = false;
+            string outFile = null, applyName = null, startup = null;
+            bool status = false, listOnly = false, tray = false;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--status") status = true;
                 else if (args[i] == "--list") listOnly = true;
+                else if (args[i] == "--tray") tray = true;
                 else if (args[i] == "--apply" && i + 1 < args.Length) applyName = args[++i];
+                else if (args[i] == "--startup" && i + 1 < args.Length) startup = args[++i];
                 else if (args[i] == "--out" && i + 1 < args.Length) outFile = args[++i];
             }
 
-            if (status || listOnly || applyName != null) return RunCli(status, listOnly, applyName, outFile);
+            if (status || listOnly || applyName != null || startup != null)
+                return RunCli(status, listOnly, applyName, startup, outFile);
 
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            // One instance only: a second launch just brings the first one to the front.
+            bool created;
+            using (Mutex mutex = new Mutex(true, "XtuProfileSwitcher.Singleton", out created))
+            using (EventWaitHandle showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, "XtuProfileSwitcher.Show"))
+            {
+                if (!created)
+                {
+                    if (!tray) showSignal.Set();
+                    return 0;
+                }
+
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new MainForm(tray, showSignal));
+                GC.KeepAlive(mutex);
+            }
             return 0;
         }
 
-        private static int RunCli(bool status, bool listOnly, string applyName, string outFile)
+        private static int RunCli(bool status, bool listOnly, string applyName, string startup, string outFile)
         {
             StringBuilder sb = new StringBuilder();
             int code = 0;
-            using (XtuClient client = new XtuClient())
-            {
-                Snapshot s = Model.Read(client);
-                List<Profile> profiles = Model.LoadProfiles(s);
-                Profile active = Model.ActiveProfile(profiles, s);
 
-                if (status || listOnly || applyName != null)
+            if (startup != null)
+            {
+                try
                 {
+                    if (startup == "on") StartupTask.Enable();
+                    else if (startup == "off") StartupTask.Disable();
+                    sb.AppendLine("startup task exists: " + StartupTask.Exists());
+                }
+                catch (Exception ex) { sb.AppendLine("startup failed: " + ex.Message); code = 1; }
+            }
+
+            if (status || listOnly || applyName != null)
+            {
+                using (XtuClient client = new XtuClient())
+                {
+                    Snapshot s = Model.Read(client);
+                    List<Profile> profiles = Model.LoadProfiles(s);
+                    Profile active = Model.ActiveProfile(profiles, s);
+
                     sb.AppendLine("service: " + s.ServiceState);
                     sb.AppendLine("connected: " + s.Connected + (s.Error.Length > 0 ? " (" + s.Error + ")" : ""));
                     if (s.Connected)
@@ -704,26 +1294,26 @@ namespace XtuProfileSwitcher
                         sb.AppendLine("matching profile: " + (active != null ? active.Name : "(none)"));
                         sb.AppendLine("restore after reboot: " + s.RestoreOnBoot + "   fast startup: " + s.FastStartup);
                     }
-                }
-                if (listOnly || status)
-                    foreach (Profile p in profiles)
-                        sb.AppendLine("profile: " + p.Name + "  " + p.Describe() + (p == active ? "   <== active" : ""));
+                    if (listOnly || status)
+                        foreach (Profile p in profiles)
+                            sb.AppendLine("profile: " + p.Name + "  " + p.Describe() + (p == active ? "   <== active" : ""));
 
-                if (applyName != null)
-                {
-                    Profile target = null;
-                    foreach (Profile p in profiles)
-                        if (string.Equals(p.Name, applyName, StringComparison.OrdinalIgnoreCase)) target = p;
-                    if (target == null) { sb.AppendLine("apply: profile not found: " + applyName); code = 2; }
-                    else
+                    if (applyName != null)
                     {
-                        try
+                        Profile target = null;
+                        foreach (Profile p in profiles)
+                            if (string.Equals(p.Name, applyName, StringComparison.OrdinalIgnoreCase)) target = p;
+                        if (target == null) { sb.AppendLine("apply: profile not found: " + applyName); code = 2; }
+                        else
                         {
-                            if (!client.IsOpen) client.Connect();
-                            sb.AppendLine("apply [" + target.Name + "] " + target.Describe());
-                            sb.AppendLine("result: " + client.Apply(target));
+                            try
+                            {
+                                if (!client.IsOpen) client.Connect();
+                                sb.AppendLine("apply [" + target.Name + "] " + target.Describe());
+                                sb.AppendLine("result: " + client.Apply(target));
+                            }
+                            catch (Exception ex) { sb.AppendLine("apply failed: " + ex.Message); code = 1; }
                         }
-                        catch (Exception ex) { sb.AppendLine("apply failed: " + ex.Message); code = 1; }
                     }
                 }
             }
