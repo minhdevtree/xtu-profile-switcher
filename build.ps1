@@ -13,7 +13,7 @@ foreach ($d in 'XtuInterface.dll', 'XtuCommon.dll') {
 }
 
 $manifest = Join-Path $here 'app.manifest'
-$source = Join-Path $here 'Program.cs'
+$sources = @(Get-ChildItem -Path $here -Filter '*.cs' | ForEach-Object { $_.FullName })
 $icon = Join-Path $here 'app.ico'
 if (-not (Test-Path $icon)) { & (Join-Path $here 'make-icon.ps1') }
 
@@ -26,7 +26,7 @@ if (-not (Test-Path $icon)) { & (Join-Path $here 'make-icon.ps1') }
     /r:System.dll /r:System.Core.dll /r:System.Xml.dll /r:System.Drawing.dll `
     /r:System.Windows.Forms.dll /r:System.ServiceModel.dll /r:System.ServiceProcess.dll `
     "/r:$xtu\XtuInterface.dll" "/r:$xtu\XtuCommon.dll" `
-    $source
+    $sources
 
 if ($LASTEXITCODE -ne 0) { throw "Build failed ($LASTEXITCODE)" }
 Write-Host "Built $out"

@@ -61,23 +61,6 @@ namespace XtuProfileSwitcher
         public static string SettingsFile { get { return Path.Combine(DataDir, "settings.ini"); } }
     }
 
-    internal static class AppIcon
-    {
-        // Picks the best-matching size from the embedded multi-size icon.
-        public static Icon Load(int size)
-        {
-            try
-            {
-                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("XtuProfileSwitcher.app.ico"))
-                {
-                    if (s != null) return new Icon(s, new Size(size, size));
-                }
-            }
-            catch { }
-            return SystemIcons.Application;
-        }
-    }
-
     internal static class Ids
     {
         // Control ids from IronCity.Common.ControlIdHelper.
@@ -242,6 +225,8 @@ namespace XtuProfileSwitcher
         public readonly Dictionary<string, string> Hotkeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public readonly List<Profile> Customs = new List<Profile>();
         public bool AutoSwitch;
+        public string Lang = "en";        // "en" | "vi"
+        public string Theme = "auto";     // "auto" (follow Windows) | "light" | "dark"
         public string AcProfile = "";
         public string BatteryProfile = "";
 
@@ -266,6 +251,8 @@ namespace XtuProfileSwitcher
                 if (tag == "@auto") s.AutoSwitch = f[1].Trim() == "1";
                 else if (tag == "@ac") s.AcProfile = f[1].Trim();
                 else if (tag == "@battery") s.BatteryProfile = f[1].Trim();
+                else if (tag == "@lang") s.Lang = f[1].Trim() == "vi" ? "vi" : "en";
+                else if (tag == "@theme") s.Theme = (f[1].Trim() == "light" || f[1].Trim() == "dark") ? f[1].Trim() : "auto";
                 else if (tag == "@custom" && f.Length >= 5)
                 {
                     Profile p = new Profile();
@@ -289,6 +276,8 @@ namespace XtuProfileSwitcher
             foreach (KeyValuePair<string, string> kv in Hotkeys)
                 if (!string.IsNullOrEmpty(kv.Value)) lines.Add(kv.Key + "\t" + kv.Value);
             lines.Add("@auto\t" + (AutoSwitch ? "1" : "0"));
+            lines.Add("@lang\t" + Lang);
+            if (Theme != "auto") lines.Add("@theme\t" + Theme);
             if (AcProfile.Length > 0) lines.Add("@ac\t" + AcProfile);
             if (BatteryProfile.Length > 0) lines.Add("@battery\t" + BatteryProfile);
             foreach (Profile p in Customs)
@@ -398,7 +387,7 @@ namespace XtuProfileSwitcher
             channel = factory.CreateChannel();
             try
             {
-                if (!channel.Connect()) throw new InvalidOperationException("Dịch vụ XTU từ chối kết nối.");
+                if (!channel.Connect()) throw new InvalidOperationException(Loc.T("err.refused"));
             }
             catch
             {
@@ -421,7 +410,7 @@ namespace XtuProfileSwitcher
         {
             get
             {
-                if (channel == null) throw new InvalidOperationException("Chưa kết nối.");
+                if (channel == null) throw new InvalidOperationException(Loc.T("err.notconnected"));
                 return channel;
             }
         }
@@ -442,12 +431,12 @@ namespace XtuProfileSwitcher
             Validate(p);
 
             RefreshFromHardware();
-            if (AlreadyApplied(p)) return "Đã ở sẵn giá trị của profile này, không cần đổi.";
+            if (AlreadyApplied(p)) return Loc.T("msg.already");
 
             IronCity.Core.XtuTuningControl c1 = Control(Ids.Pl1);
             IronCity.Core.XtuTuningControl c2 = Control(Ids.Pl2);
-            if (c1.ReadOnly || !c1.Enabled) throw new InvalidOperationException("PL1 đang bị khoá (chỉ đọc hoặc bị tắt).");
-            if (c2.ReadOnly || !c2.Enabled) throw new InvalidOperationException("PL2 đang bị khoá (chỉ đọc hoặc bị tắt).");
+            if (c1.ReadOnly || !c1.Enabled) throw new InvalidOperationException(Loc.F("err.locked", "PL1"));
+            if (c2.ReadOnly || !c2.Enabled) throw new InvalidOperationException(Loc.F("err.locked", "PL2"));
             RequireSupported(c1, p.Pl1, "PL1");
             RequireSupported(c2, p.Pl2, "PL2");
 
@@ -468,21 +457,21 @@ namespace XtuProfileSwitcher
             if (proposed.GeneralCode != IronCity.Common.TuningErrorCode.Success || requiresReboot)
             {
                 Ch.DiscardChanges(token, out discarded);
-                throw new InvalidOperationException("XTU từ chối giá trị: " + Describe(proposed)
-                    + (requiresReboot ? " (cần khởi động lại)" : ""));
+                throw new InvalidOperationException(Loc.F("err.rejected", Describe(proposed))
+                    + (requiresReboot ? Loc.T("err.reboot") : ""));
             }
 
             IronCity.Common.TuningResult applied = Ch.ApplyChanges(false, 1, token);
             if (applied.GeneralCode != IronCity.Common.TuningErrorCode.Success)
             {
                 Ch.DiscardChanges(token, out discarded);
-                throw new InvalidOperationException("Áp giá trị thất bại: " + Describe(applied));
+                throw new InvalidOperationException(Loc.F("err.applyfail", Describe(applied)));
             }
 
             // Read back, so the caller sees what the hardware really has.
             RefreshFromHardware();
             decimal a1 = Active(Ids.Pl1), a2 = Active(Ids.Pl2), aw = Active(Ids.Window);
-            return string.Format("Đã áp dụng. PL1 = {0:0.###} W, PL2 = {1:0.###} W, Time Window = {2:0.###} s.", a1, a2, aw);
+            return Loc.F("msg.applied", a1.ToString("0.###"), a2.ToString("0.###"), aw.ToString("0.###"));
         }
 
         private bool AlreadyApplied(Profile p)
@@ -517,17 +506,17 @@ namespace XtuProfileSwitcher
             if (c.SupportedValues == null) return;
             foreach (decimal v in c.SupportedValues)
                 if (v == value) return;
-            throw new InvalidOperationException(label + " = " + value + " W không nằm trong danh sách giá trị XTU hỗ trợ.");
+            throw new InvalidOperationException(Loc.F("err.unsupported", label, value));
         }
 
         public static void Validate(Profile p)
         {
             if (p.Pl1 < Limits.MinPl1 || p.Pl1 > Limits.MaxPl1)
-                throw new InvalidOperationException(string.Format("PL1 = {0} W nằm ngoài khoảng an toàn {1}–{2} W.", p.Pl1, Limits.MinPl1, Limits.MaxPl1));
+                throw new InvalidOperationException(Loc.F("val.pl1", Limits.MinPl1, Limits.MaxPl1));
             if (p.Pl2 < p.Pl1 || p.Pl2 > Limits.MaxPl2)
-                throw new InvalidOperationException(string.Format("PL2 = {0} W phải nằm trong khoảng PL1–{1} W.", p.Pl2, Limits.MaxPl2));
+                throw new InvalidOperationException(Loc.F("val.pl2", Limits.MaxPl2));
             if (p.Window < Limits.MinWindow || p.Window > Limits.MaxWindow)
-                throw new InvalidOperationException(string.Format("Time Window = {0} s nằm ngoài khoảng {1}–{2} s.", p.Window, Limits.MinWindow, Limits.MaxWindow));
+                throw new InvalidOperationException(Loc.F("val.window", Limits.MinWindow, Limits.MaxWindow));
         }
     }
 
@@ -601,11 +590,11 @@ namespace XtuProfileSwitcher
                 using (ServiceController sc = new ServiceController(Paths.ServiceName))
                     s.ServiceState = sc.Status.ToString();
             }
-            catch (Exception ex) { s.ServiceState = "không tìm thấy (" + ex.Message + ")"; }
+            catch (Exception) { s.ServiceState = "NotFound"; }
 
             object fs = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Power",
                 "HiberbootEnabled", null);
-            s.FastStartup = fs == null ? "?" : (Convert.ToInt32(fs) == 0 ? "Tắt" : "Bật");
+            s.FastStartup = fs == null ? "?" : (Convert.ToInt32(fs) == 0 ? "Off" : "On");
 
             try
             {
@@ -645,952 +634,6 @@ namespace XtuProfileSwitcher
         }
     }
 
-    // Small borderless, non-activating pop-up that shows for a couple of seconds.
-    internal sealed class Osd : Form
-    {
-        private static Osd current;
-        private readonly System.Windows.Forms.Timer life = new System.Windows.Forms.Timer();
-
-        public static void Flash(string title, string detail, bool error)
-        {
-            try
-            {
-                if (current != null && !current.IsDisposed) current.Close();
-                current = new Osd(title, detail, error);
-                current.Show();
-            }
-            catch (Exception ex) { Log.Write("OSD failed: " + ex.Message); }
-        }
-
-        private Osd(string title, string detail, bool error)
-        {
-            FormBorderStyle = FormBorderStyle.None;
-            ShowInTaskbar = false;
-            TopMost = true;
-            StartPosition = FormStartPosition.Manual;
-            BackColor = error ? Color.FromArgb(120, 28, 28) : Color.FromArgb(32, 36, 44);
-            Opacity = 0.94;
-            Size = new Size(440, 78);
-
-            Label t = new Label();
-            t.Text = title;
-            t.ForeColor = Color.White;
-            t.Font = new Font("Segoe UI Semibold", 13f);
-            t.AutoSize = false;
-            t.SetBounds(16, 8, 408, 30);
-            Controls.Add(t);
-
-            Label d = new Label();
-            d.Text = detail;
-            d.ForeColor = Color.FromArgb(205, 210, 220);
-            d.Font = new Font("Segoe UI", 10f);
-            d.AutoSize = false;
-            d.SetBounds(16, 40, 408, 30);
-            Controls.Add(d);
-
-            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-            Location = new Point(wa.Left + (wa.Width - Width) / 2, wa.Bottom - Height - 60);
-
-            life.Interval = 2600;
-            life.Tick += delegate { life.Stop(); Close(); };
-            Shown += delegate { life.Start(); };
-        }
-
-        protected override bool ShowWithoutActivation { get { return true; } }
-
-        protected override CreateParams CreateParams
-        {
-            get
-            {
-                CreateParams cp = base.CreateParams;
-                // WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT (click-through)
-                cp.ExStyle |= 0x08000000 | 0x00000080 | 0x00000020;
-                return cp;
-            }
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) life.Dispose();
-            base.Dispose(disposing);
-        }
-    }
-
-    // Dialog that records a key combination.
-    internal sealed class HotkeyDialog : Form
-    {
-        private readonly Label shown = new Label();
-        public string Result;   // null = unchanged, "" = cleared, otherwise hotkey text
-
-        public HotkeyDialog(string profileName, string current)
-        {
-            Text = "Phím tắt – " + profileName;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
-            StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(380, 150);
-            Font = new Font("Segoe UI", 9.5f);
-
-            Label hint = new Label();
-            hint.Text = "Nhấn tổ hợp phím mới (cần Ctrl hoặc Alt):";
-            hint.AutoSize = true;
-            hint.Location = new Point(16, 14);
-            Controls.Add(hint);
-
-            shown.Text = string.IsNullOrEmpty(current) ? "(chưa gán)" : current;
-            shown.Font = new Font("Segoe UI Semibold", 13f);
-            shown.BorderStyle = BorderStyle.FixedSingle;
-            shown.TextAlign = ContentAlignment.MiddleCenter;
-            shown.SetBounds(16, 42, 348, 40);
-            Controls.Add(shown);
-
-            Button ok = new Button();
-            ok.Text = "Lưu";
-            ok.DialogResult = DialogResult.OK;
-            ok.SetBounds(16, 100, 90, 32);
-            Controls.Add(ok);
-
-            Button clear = new Button();
-            clear.Text = "Xoá phím";
-            clear.SetBounds(116, 100, 100, 32);
-            clear.Click += delegate { Result = ""; shown.Text = "(chưa gán)"; };
-            Controls.Add(clear);
-
-            Button cancel = new Button();
-            cancel.Text = "Huỷ";
-            cancel.DialogResult = DialogResult.Cancel;
-            cancel.SetBounds(274, 100, 90, 32);
-            Controls.Add(cancel);
-
-            AcceptButton = ok;
-            CancelButton = cancel;
-        }
-
-        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
-        {
-            Keys key = keyData & Keys.KeyCode;
-            if (key == Keys.ControlKey || key == Keys.ShiftKey || key == Keys.Menu || key == Keys.None)
-                return base.ProcessCmdKey(ref msg, keyData);
-            if (key == Keys.Escape || key == Keys.Enter || key == Keys.Tab)
-                return base.ProcessCmdKey(ref msg, keyData);
-
-            Hotkey h = new Hotkey();
-            h.Key = key;
-            if ((keyData & Keys.Control) != 0) h.Mods |= Hotkey.Ctrl;
-            if ((keyData & Keys.Alt) != 0) h.Mods |= Hotkey.Alt;
-            if ((keyData & Keys.Shift) != 0) h.Mods |= Hotkey.Shift;
-            if ((h.Mods & (Hotkey.Ctrl | Hotkey.Alt)) == 0) return true;   // ignore until Ctrl/Alt is held
-
-            Result = h.ToString();
-            shown.Text = Result;
-            return true;
-        }
-    }
-
-    // Dialog to create a power-limit profile that lives in this tool (not in XTU).
-    internal sealed class ProfileDialog : Form
-    {
-        private readonly TextBox name = new TextBox();
-        private readonly NumericUpDown pl1 = new NumericUpDown();
-        private readonly NumericUpDown pl2 = new NumericUpDown();
-        private readonly NumericUpDown window = new NumericUpDown();
-        private readonly Label error = new Label();
-        private readonly List<string> used;
-        public Profile Result;
-
-        public ProfileDialog(List<string> usedNames)
-        {
-            used = usedNames;
-            Text = "Thêm profile";
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
-            StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(380, 262);
-            Font = new Font("Segoe UI", 9.5f);
-
-            AddField("Tên profile", name, 16, null);
-            name.Text = "PL35-40W";
-            AddField("PL1 – dài hạn (W)", pl1, 56, null);
-            pl1.Minimum = Limits.MinPl1; pl1.Maximum = Limits.MaxPl1; pl1.DecimalPlaces = 0; pl1.Value = 35;
-            AddField("PL2 – ngắn hạn (W)", pl2, 96, null);
-            pl2.Minimum = Limits.MinPl1; pl2.Maximum = Limits.MaxPl2; pl2.DecimalPlaces = 0; pl2.Value = 40;
-            AddField("Time Window (giây)", window, 136, null);
-            window.Minimum = Limits.MinWindow; window.Maximum = Limits.MaxWindow; window.DecimalPlaces = 0; window.Value = 56;
-
-            error.ForeColor = Color.Firebrick;
-            error.SetBounds(16, 176, 348, 34);
-            Controls.Add(error);
-
-            Button ok = new Button();
-            ok.Text = "Tạo";
-            ok.SetBounds(16, 216, 90, 32);
-            ok.Click += delegate { TryCreate(); };
-            Controls.Add(ok);
-
-            Button cancel = new Button();
-            cancel.Text = "Huỷ";
-            cancel.DialogResult = DialogResult.Cancel;
-            cancel.SetBounds(274, 216, 90, 32);
-            Controls.Add(cancel);
-
-            AcceptButton = ok;
-            CancelButton = cancel;
-        }
-
-        private void AddField(string caption, Control box, int y, object unused)
-        {
-            Label l = new Label();
-            l.Text = caption;
-            l.AutoSize = true;
-            l.Location = new Point(16, y + 4);
-            Controls.Add(l);
-            box.SetBounds(180, y, 184, 26);
-            Controls.Add(box);
-        }
-
-        private void TryCreate()
-        {
-            string n = name.Text.Trim();
-            if (n.Length == 0 || n.Length > 40) { error.Text = "Tên phải có 1–40 ký tự."; return; }
-            if (n.StartsWith("@") || n.IndexOf('\t') >= 0 || n.IndexOf('\n') >= 0 || n.IndexOf('\r') >= 0)
-            { error.Text = "Tên không được bắt đầu bằng @ hoặc chứa tab/xuống dòng."; return; }
-            foreach (string u in used)
-                if (string.Equals(u, n, StringComparison.OrdinalIgnoreCase)) { error.Text = "Đã có profile tên \"" + u + "\"."; return; }
-
-            Profile p = new Profile();
-            p.Name = n;
-            p.Custom = true;
-            p.Pl1 = pl1.Value;
-            p.Pl2 = pl2.Value;
-            p.Pl2Enable = true;
-            p.Window = window.Value;
-            try { XtuClient.Validate(p); }
-            catch (Exception ex) { error.Text = ex.Message; return; }
-
-            Result = p;
-            DialogResult = DialogResult.OK;
-            Close();
-        }
-    }
-
-    internal sealed class MainForm : Form
-    {
-        private const int WmHotkey = 0x0312;
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-
-        private readonly XtuClient client = new XtuClient();
-        private readonly NotifyIcon tray = new NotifyIcon();
-        private readonly ContextMenuStrip trayMenu = new ContextMenuStrip();
-        private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
-        private readonly System.Windows.Forms.Timer resumeTimer = new System.Windows.Forms.Timer();
-
-        private readonly Label lblService = new Label();
-        private readonly Label lblPipe = new Label();
-        private readonly Label lblRestore = new Label();
-        private readonly Label lblFast = new Label();
-        private readonly Label lblPl = new Label();
-        private readonly Label lblActive = new Label();
-        private readonly ListView list = new ListView();
-        private readonly Button btnApply = new Button();
-        private readonly Button btnHotkey = new Button();
-        private readonly Button btnRefresh = new Button();
-        private readonly Button btnStart = new Button();
-        private readonly Button btnAdd = new Button();
-        private readonly Button btnDelete = new Button();
-        private readonly CheckBox chkStartup = new CheckBox();
-        private readonly CheckBox chkAuto = new CheckBox();
-        private readonly ComboBox cmbAc = new ComboBox();
-        private readonly ComboBox cmbBattery = new ComboBox();
-        private readonly Label lblPower = new Label();
-        private readonly Label status = new Label();
-
-        private const string NoChange = "(không đổi)";
-
-        private readonly AppSettings settings = AppSettings.Load();
-        private Dictionary<string, string> hotkeys { get { return settings.Hotkeys; } }
-        private List<Profile> profiles = new List<Profile>();
-        private Snapshot last = new Snapshot();
-        private readonly Dictionary<int, string> registered = new Dictionary<int, string>();
-        private PowerLineStatus lastLine = PowerLineStatus.Unknown;
-        private bool suppressAutoEvents;
-        private string comboKey = "";
-        private bool reallyExit;
-        private bool startHidden;
-        private bool busy;
-        private bool suppressStartupEvent;
-        private int tick;
-
-        public MainForm(bool startHidden, EventWaitHandle showSignal)
-        {
-            this.startHidden = startHidden;
-
-            Text = "XTU Profile Switcher";
-            Icon = AppIcon.Load(32);
-            ClientSize = new Size(560, 730);
-            StartPosition = FormStartPosition.CenterScreen;
-            Font = new Font("Segoe UI", 9.5f);
-            MinimumSize = new Size(560, 730);
-
-            Label title = new Label();
-            title.Text = "XTU Profile Switcher";
-            title.Font = new Font("Segoe UI Semibold", 14f);
-            title.AutoSize = true;
-            title.Location = new Point(16, 12);
-            Controls.Add(title);
-
-            GroupBox gbStatus = new GroupBox();
-            gbStatus.Text = "Trạng thái";
-            gbStatus.SetBounds(16, 52, 528, 112);
-            gbStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            AddRow(gbStatus, "Dịch vụ XTU", lblService, 22);
-            AddRow(gbStatus, "Kết nối tới dịch vụ", lblPipe, 44);
-            AddRow(gbStatus, "Khôi phục sau reboot", lblRestore, 66);
-            AddRow(gbStatus, "Fast Startup", lblFast, 88);
-            Controls.Add(gbStatus);
-
-            GroupBox gbNow = new GroupBox();
-            gbNow.Text = "Đang áp dụng (đọc từ dịch vụ)";
-            gbNow.SetBounds(16, 172, 528, 72);
-            gbNow.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            AddRow(gbNow, "Giới hạn công suất", lblPl, 22);
-            AddRow(gbNow, "Profile khớp", lblActive, 44);
-            Controls.Add(gbNow);
-
-            list.SetBounds(16, 254, 528, 170);
-            list.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            list.View = View.Details;
-            list.FullRowSelect = true;
-            list.MultiSelect = false;
-            list.HideSelection = false;
-            list.Columns.Add("Profile", 140);
-            list.Columns.Add("PL1 (W)", 60);
-            list.Columns.Add("PL2 (W)", 70);
-            list.Columns.Add("Window (s)", 75);
-            list.Columns.Add("Phím tắt", 100);
-            list.Columns.Add("Trạng thái", 80);
-            list.DoubleClick += delegate { ApplySelected(); };
-            list.SelectedIndexChanged += delegate { UpdateButtons(); };
-            Controls.Add(list);
-
-            btnApply.Text = "Áp dụng profile đã chọn";
-            btnApply.SetBounds(16, 432, 200, 32);
-            btnApply.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            btnApply.Click += delegate { ApplySelected(); };
-            Controls.Add(btnApply);
-
-            btnHotkey.Text = "Gán phím tắt…";
-            btnHotkey.SetBounds(226, 432, 140, 32);
-            btnHotkey.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            btnHotkey.Click += delegate { EditHotkey(); };
-            Controls.Add(btnHotkey);
-
-            btnRefresh.Text = "Làm mới";
-            btnRefresh.SetBounds(376, 432, 100, 32);
-            btnRefresh.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            btnRefresh.Click += delegate { RefreshAll(); };
-            Controls.Add(btnRefresh);
-
-            btnAdd.Text = "Thêm profile…";
-            btnAdd.SetBounds(16, 472, 150, 32);
-            btnAdd.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            btnAdd.Click += delegate { AddProfile(); };
-            Controls.Add(btnAdd);
-
-            btnDelete.Text = "Xoá profile";
-            btnDelete.SetBounds(176, 472, 130, 32);
-            btnDelete.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            btnDelete.Click += delegate { DeleteProfile(); };
-            Controls.Add(btnDelete);
-
-            btnStart.Text = "Khởi động dịch vụ";
-            btnStart.SetBounds(316, 472, 160, 32);
-            btnStart.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            btnStart.Click += delegate { StartService(); };
-            Controls.Add(btnStart);
-
-            GroupBox gbAuto = new GroupBox();
-            gbAuto.Text = "Tự đổi theo nguồn điện";
-            gbAuto.SetBounds(16, 512, 528, 132);
-            gbAuto.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-
-            chkAuto.Text = "Tự đổi profile khi đổi nguồn (cắm sạc ↔ pin)";
-            chkAuto.AutoSize = true;
-            chkAuto.Location = new Point(12, 22);
-            chkAuto.CheckedChanged += OnAutoChanged;
-            gbAuto.Controls.Add(chkAuto);
-
-            AddRow(gbAuto, "Nguồn hiện tại", lblPower, 52);
-
-            Label capAc = new Label();
-            capAc.Text = "Khi cắm sạc dùng";
-            capAc.AutoSize = true;
-            capAc.ForeColor = Color.DimGray;
-            capAc.Location = new Point(12, 80);
-            gbAuto.Controls.Add(capAc);
-            cmbAc.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbAc.SetBounds(190, 76, 320, 26);
-            cmbAc.SelectionChangeCommitted += OnAutoChanged;
-            gbAuto.Controls.Add(cmbAc);
-
-            Label capBat = new Label();
-            capBat.Text = "Khi dùng pin dùng";
-            capBat.AutoSize = true;
-            capBat.ForeColor = Color.DimGray;
-            capBat.Location = new Point(12, 106);
-            gbAuto.Controls.Add(capBat);
-            cmbBattery.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbBattery.SetBounds(190, 102, 320, 26);
-            cmbBattery.SelectionChangeCommitted += OnAutoChanged;
-            gbAuto.Controls.Add(cmbBattery);
-            Controls.Add(gbAuto);
-
-            chkStartup.Text = "Mở cùng Windows (chạy ẩn ở khay)";
-            chkStartup.AutoSize = true;
-            chkStartup.Location = new Point(16, 654);
-            chkStartup.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-            chkStartup.CheckedChanged += OnStartupChanged;
-            Controls.Add(chkStartup);
-
-            status.SetBounds(16, 682, 528, 40);
-            status.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-            status.ForeColor = Color.DimGray;
-            Controls.Add(status);
-
-            tray.Icon = AppIcon.Load(SystemInformation.SmallIconSize.Width);
-            tray.Visible = true;
-            tray.ContextMenuStrip = trayMenu;
-            tray.DoubleClick += delegate { ShowWindow(); };
-
-            timer.Interval = 5000;
-            timer.Tick += delegate
-            {
-                // Refresh less often while hidden in the tray.
-                tick++;
-                if (Visible || tick % 3 == 0) RefreshAll();
-                CheckPowerSource(false);   // backup for the power event; cheap
-            };
-
-            resumeTimer.Interval = 4000;
-            resumeTimer.Tick += delegate { resumeTimer.Stop(); CheckPowerSource(true); };
-
-            SystemEvents.PowerModeChanged += OnPowerModeChanged;
-
-            // Load does not fire when the window starts hidden in the tray, so initialise explicitly.
-            Load += delegate { Init(); };
-            FormClosing += OnFormClosing;
-            Resize += delegate { if (WindowState == FormWindowState.Minimized) Hide(); };
-
-            if (showSignal != null)
-            {
-                ThreadPool.RegisterWaitForSingleObject(showSignal, delegate
-                {
-                    try { if (IsHandleCreated) BeginInvoke(new Action(ShowWindow)); } catch { }
-                }, null, -1, false);
-            }
-        }
-
-        private bool inited;
-
-        private void Init()
-        {
-            if (inited) return;
-            inited = true;
-            suppressStartupEvent = true;
-            try { chkStartup.Checked = StartupTask.Exists(); } catch { }
-            suppressStartupEvent = false;
-            RefreshAll();
-            CheckPowerSource(false);   // apply the profile for the current power source once at start
-            timer.Start();
-        }
-
-        private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
-        {
-            // Raised on a system thread; hop to the UI thread.
-            bool resumed = e.Mode == PowerModes.Resume;
-            try
-            {
-                if (!IsHandleCreated) return;
-                BeginInvoke(new Action(delegate
-                {
-                    CheckPowerSource(false);
-                    // Power limits can fall back to firmware defaults around sleep, so re-apply the
-                    // profile for the current power source shortly after waking (if auto-switch is on).
-                    if (resumed && settings.AutoSwitch) { resumeTimer.Stop(); resumeTimer.Start(); }
-                }));
-            }
-            catch { }
-        }
-
-        // Start hidden in the tray when asked to, without flashing a window.
-        protected override void SetVisibleCore(bool value)
-        {
-            if (startHidden)
-            {
-                value = false;
-                if (!IsHandleCreated) CreateHandle();
-                Init();
-            }
-            base.SetVisibleCore(value);
-        }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            RegisterHotkeys();
-        }
-
-        protected override void OnHandleDestroyed(EventArgs e)
-        {
-            UnregisterHotkeys();
-            base.OnHandleDestroyed(e);
-        }
-
-        protected override void WndProc(ref Message m)
-        {
-            if (m.Msg == WmHotkey)
-            {
-                string name;
-                if (registered.TryGetValue(m.WParam.ToInt32(), out name)) ApplyByName(name);
-                return;
-            }
-            base.WndProc(ref m);
-        }
-
-        private static void AddRow(GroupBox box, string caption, Label value, int y)
-        {
-            Label cap = new Label();
-            cap.Text = caption;
-            cap.AutoSize = true;
-            cap.Location = new Point(12, y);
-            cap.ForeColor = Color.DimGray;
-            box.Controls.Add(cap);
-
-            value.AutoSize = true;
-            value.Location = new Point(190, y);
-            box.Controls.Add(value);
-        }
-
-        private void ShowWindow()
-        {
-            startHidden = false;
-            Show();
-            WindowState = FormWindowState.Normal;
-            Activate();
-            RefreshAll();
-        }
-
-        private void OnFormClosing(object sender, FormClosingEventArgs e)
-        {
-            if (!reallyExit && e.CloseReason == CloseReason.UserClosing)
-            {
-                e.Cancel = true;
-                Hide();
-                Osd.Flash("XTU Profile Switcher", "Vẫn chạy ở khay hệ thống (chuột phải biểu tượng để thoát).", false);
-                return;
-            }
-            timer.Stop();
-            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
-            tray.Visible = false;
-            client.Dispose();
-        }
-
-        private void Say(string text, bool error)
-        {
-            status.Text = text;
-            status.ForeColor = error ? Color.Firebrick : Color.DimGray;
-            Log.Write((error ? "ERROR " : "INFO  ") + text);
-        }
-
-        // ---- hotkeys ------------------------------------------------------------------
-
-        private void RegisterHotkeys()
-        {
-            UnregisterHotkeys();
-            List<string> failed = new List<string>();
-            int id = 1;
-            foreach (KeyValuePair<string, string> kv in hotkeys)
-            {
-                Hotkey h = Hotkey.Parse(kv.Value);
-                if (h == null) { failed.Add(kv.Key + " (" + kv.Value + ")"); continue; }
-                if (RegisterHotKey(Handle, id, h.Mods | Hotkey.NoRepeat, (uint)h.Key))
-                {
-                    registered[id] = kv.Key;
-                    Log.Write("hotkey " + h + " -> " + kv.Key);
-                    id++;
-                }
-                else failed.Add(kv.Key + " (" + h + ")");
-            }
-            if (failed.Count > 0)
-                Say("Không đăng ký được phím tắt (đã bị ứng dụng khác dùng?): " + string.Join(", ", failed.ToArray()), true);
-        }
-
-        private void UnregisterHotkeys()
-        {
-            if (!IsHandleCreated) return;
-            foreach (int id in registered.Keys) UnregisterHotKey(Handle, id);
-            registered.Clear();
-        }
-
-        private void EditHotkey()
-        {
-            if (list.SelectedItems.Count == 0) { Say("Chọn một profile trong danh sách trước.", true); return; }
-            Profile p = (Profile)list.SelectedItems[0].Tag;
-            string current;
-            hotkeys.TryGetValue(p.Name, out current);
-
-            using (HotkeyDialog dlg = new HotkeyDialog(p.Name, current))
-            {
-                if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Result == null) return;
-
-                string text = dlg.Result;
-                if (text.Length > 0)
-                {
-                    Hotkey h = Hotkey.Parse(text);
-                    if (h == null) { Say("Tổ hợp phím không hợp lệ (cần Ctrl hoặc Alt).", true); return; }
-
-                    foreach (KeyValuePair<string, string> kv in hotkeys)
-                    {
-                        Hotkey other = Hotkey.Parse(kv.Value);
-                        if (other != null && kv.Key != p.Name && other.Canonical() == h.Canonical())
-                        { Say("Tổ hợp " + h + " đã gán cho profile \"" + kv.Key + "\".", true); return; }
-                    }
-                    if (Hotkey.XtuCombos().Contains(h.Canonical()))
-                    {
-                        Say("XTU cũng đang bắt tổ hợp " + h + " (Hotkey-Profile Pairing). Nó sẽ tự áp profile cùng lúc, "
-                            + "không có thông báo. Hãy chọn tổ hợp khác hoặc tắt tính năng đó trong XTU.", true);
-                        return;
-                    }
-                    text = h.ToString();
-                }
-
-                if (text.Length == 0) hotkeys.Remove(p.Name); else hotkeys[p.Name] = text;
-                settings.Save();
-                RegisterHotkeys();
-                RefreshAll();
-                Say(text.Length == 0 ? "Đã xoá phím tắt của " + p.Name + "." : "Đã gán " + text + " cho " + p.Name + ".", false);
-            }
-        }
-
-        private void ApplyByName(string name)
-        {
-            foreach (Profile p in profiles)
-                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) { ApplyProfile(p, true); return; }
-            Osd.Flash("Không tìm thấy profile", name, true);
-        }
-
-        // ---- startup task -------------------------------------------------------------
-
-        private void OnStartupChanged(object sender, EventArgs e)
-        {
-            if (suppressStartupEvent) return;
-            try
-            {
-                if (chkStartup.Checked) { StartupTask.Enable(); Say("Đã bật: mở cùng Windows (chạy ẩn ở khay, trễ 15 giây sau khi đăng nhập).", false); }
-                else { StartupTask.Disable(); Say("Đã tắt mở cùng Windows.", false); }
-            }
-            catch (Exception ex)
-            {
-                Say("Không đổi được tác vụ khởi động: " + ex.Message, true);
-                suppressStartupEvent = true;
-                try { chkStartup.Checked = StartupTask.Exists(); } catch { }
-                suppressStartupEvent = false;
-            }
-        }
-
-        // ---- refresh / apply ----------------------------------------------------------
-
-        private void RefreshAll()
-        {
-            last = Model.Read(client);
-            profiles = Model.LoadProfiles(last, settings.Customs);
-            Profile active = Model.ActiveProfile(profiles, last);
-
-            lblService.Text = last.ServiceState;
-            lblService.ForeColor = last.ServiceState == "Running" ? Color.SeaGreen : Color.Firebrick;
-            lblPipe.Text = last.Connected ? "Kết nối được" : "Không kết nối được" + (last.Error.Length > 0 ? " – " + Shorten(last.Error) : "");
-            lblPipe.ForeColor = last.Connected ? Color.SeaGreen : Color.Firebrick;
-            lblRestore.Text = last.Connected ? (last.RestoreOnBoot ? "Bật" : "Tắt") : "?";
-            lblFast.Text = last.FastStartup;
-            lblFast.ForeColor = last.FastStartup == "Bật" ? Color.DarkOrange : Color.SeaGreen;
-
-            if (last.Connected)
-            {
-                lblPl.Text = string.Format("PL1 {0:0.###} W  /  PL2 {1:0.###} W{2}  /  Window {3:0.###} s",
-                    last.Pl1, last.Pl2, last.Pl2Enable ? "" : " (tắt)", last.Window);
-                lblActive.Text = active != null ? active.Name : "(không khớp profile nào đã lưu)";
-                lblActive.ForeColor = active != null ? Color.SeaGreen : Color.DarkOrange;
-            }
-            else
-            {
-                lblPl.Text = "?";
-                lblActive.Text = "?";
-                lblActive.ForeColor = Color.DimGray;
-            }
-
-            string selected = list.SelectedItems.Count > 0 ? list.SelectedItems[0].Text : null;
-            list.BeginUpdate();
-            list.Items.Clear();
-            foreach (Profile p in profiles)
-            {
-                string hk;
-                hotkeys.TryGetValue(p.Name, out hk);
-                ListViewItem item = new ListViewItem(p.Name);
-                item.SubItems.Add(p.Pl1.ToString("0.###"));
-                item.SubItems.Add(p.Pl2.ToString("0.###") + (p.Pl2Enable ? "" : " (tắt)"));
-                item.SubItems.Add(p.Window.ToString("0.###"));
-                item.SubItems.Add(hk ?? "");
-                item.SubItems.Add(p == active ? "ĐANG DÙNG" : (p.Custom ? "tự tạo" : ""));
-                item.Tag = p;
-                if (p == active) item.Font = new Font(list.Font, FontStyle.Bold);
-                list.Items.Add(item);
-                if (selected != null && p.Name == selected) item.Selected = true;
-            }
-            list.EndUpdate();
-
-            btnStart.Enabled = last.ServiceState != "Running";
-            btnApply.Enabled = last.Connected;
-            FillCombos();
-            UpdateButtons();
-            UpdatePowerLabel(SystemInformation.PowerStatus.PowerLineStatus);
-            RebuildTray(active);
-        }
-
-        private static string Shorten(string s)
-        {
-            return s.Length > 70 ? s.Substring(0, 70) + "…" : s;
-        }
-
-        private void RebuildTray(Profile active)
-        {
-            trayMenu.Items.Clear();
-            foreach (Profile p in profiles)
-            {
-                Profile captured = p;
-                string hk;
-                hotkeys.TryGetValue(p.Name, out hk);
-                ToolStripMenuItem mi = new ToolStripMenuItem(p.Name + "   (" + p.Pl1.ToString("0.###") + "/" + p.Pl2.ToString("0.###") + " W)"
-                    + (string.IsNullOrEmpty(hk) ? "" : "   " + hk));
-                mi.Checked = p == active;
-                mi.Click += delegate { ApplyProfile(captured, true); };
-                trayMenu.Items.Add(mi);
-            }
-            trayMenu.Items.Add(new ToolStripSeparator());
-            ToolStripMenuItem open = new ToolStripMenuItem("Mở cửa sổ");
-            open.Click += delegate { ShowWindow(); };
-            trayMenu.Items.Add(open);
-            ToolStripMenuItem exit = new ToolStripMenuItem("Thoát");
-            exit.Click += delegate { reallyExit = true; Close(); Application.Exit(); };
-            trayMenu.Items.Add(exit);
-
-            string tip = last.Connected
-                ? string.Format("PL {0:0.###}/{1:0.###} W – {2}", last.Pl1, last.Pl2, active != null ? active.Name : "không khớp profile")
-                : "XTU: không kết nối";
-            tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
-        }
-
-        private void ApplySelected()
-        {
-            if (list.SelectedItems.Count == 0) { Say("Chọn một profile trong danh sách trước.", true); return; }
-            ApplyProfile((Profile)list.SelectedItems[0].Tag, false);
-        }
-
-        private void ApplyProfile(Profile p, bool notify)
-        {
-            ApplyProfile(p, notify, null);
-        }
-
-        // reason: non-null when the switch was automatic (e.g. "Dùng pin"), shown in the pop-up.
-        private void ApplyProfile(Profile p, bool notify, string reason)
-        {
-            if (busy) return;
-            busy = true;
-            try
-            {
-                try
-                {
-                    if (!client.IsOpen) client.Connect();
-                    string msg = client.Apply(p);
-                    Say((reason != null ? "(" + reason + ") " : "") + "[" + p.Name + "] " + msg, false);
-                    RefreshAll();
-                    if (notify)
-                    {
-                        string values = last.Connected
-                            ? string.Format("PL1 {0:0.###} W · PL2 {1:0.###} W · {2:0.###} s", last.Pl1, last.Pl2, last.Window)
-                            : msg;
-                        if (msg.StartsWith("Đã ở sẵn")) values = "Đã ở sẵn · " + values;
-                        if (reason != null) values = reason + " · " + values;
-                        Osd.Flash(p.Name, values, false);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    client.Close();
-                    Say("Không áp dụng được [" + p.Name + "]: " + ex.Message, true);
-                    RefreshAll();
-                    if (notify) Osd.Flash("Không áp dụng được " + p.Name, Shorten(ex.Message), true);
-                }
-            }
-            finally { busy = false; }
-        }
-
-        // ---- profiles created in this tool ---------------------------------------------
-
-        private void AddProfile()
-        {
-            List<string> used = new List<string>();
-            foreach (Profile p in profiles) used.Add(p.Name);
-
-            using (ProfileDialog dlg = new ProfileDialog(used))
-            {
-                if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Result == null) return;
-                settings.Customs.Add(dlg.Result);
-                settings.Save();
-                RefreshAll();
-                foreach (ListViewItem it in list.Items)
-                    if (it.Text == dlg.Result.Name) { it.Selected = true; it.EnsureVisible(); }
-                Say("Đã tạo profile \"" + dlg.Result.Name + "\" (" + dlg.Result.Describe() + ").", false);
-            }
-        }
-
-        private void DeleteProfile()
-        {
-            if (list.SelectedItems.Count == 0) { Say("Chọn một profile trong danh sách trước.", true); return; }
-            Profile p = (Profile)list.SelectedItems[0].Tag;
-            if (!p.Custom) { Say("Chỉ xoá được profile tạo trong công cụ này (profile của XTU thì xoá trong XTU).", true); return; }
-            if (MessageBox.Show(this, "Xoá profile \"" + p.Name + "\"?", "XTU Profile Switcher",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-
-            settings.Customs.RemoveAll(delegate (Profile c) { return c.Name == p.Name; });
-            settings.Hotkeys.Remove(p.Name);
-            if (string.Equals(settings.AcProfile, p.Name, StringComparison.OrdinalIgnoreCase)) settings.AcProfile = "";
-            if (string.Equals(settings.BatteryProfile, p.Name, StringComparison.OrdinalIgnoreCase)) settings.BatteryProfile = "";
-            settings.Save();
-            RegisterHotkeys();
-            comboKey = "";
-            RefreshAll();
-            Say("Đã xoá profile \"" + p.Name + "\".", false);
-        }
-
-        private void UpdateButtons()
-        {
-            Profile sel = list.SelectedItems.Count > 0 ? (Profile)list.SelectedItems[0].Tag : null;
-            btnDelete.Enabled = sel != null && sel.Custom;
-        }
-
-        // ---- automatic switch by power source ----------------------------------------------
-
-        private string ComboValue(ComboBox box)
-        {
-            string s = box.SelectedItem as string;
-            return (s == null || s == NoChange) ? "" : s;
-        }
-
-        // Rebuild the two drop-downs only when the set of profile names changes.
-        private void FillCombos()
-        {
-            StringBuilder key = new StringBuilder();
-            foreach (Profile p in profiles) key.Append(p.Name).Append('|');
-            key.Append(settings.AcProfile).Append('|').Append(settings.BatteryProfile);
-            if (key.ToString() == comboKey) return;
-            comboKey = key.ToString();
-
-            suppressAutoEvents = true;
-            try
-            {
-                chkAuto.Checked = settings.AutoSwitch;
-                FillCombo(cmbAc, settings.AcProfile);
-                FillCombo(cmbBattery, settings.BatteryProfile);
-            }
-            finally { suppressAutoEvents = false; }
-        }
-
-        private void FillCombo(ComboBox box, string selected)
-        {
-            box.Items.Clear();
-            box.Items.Add(NoChange);
-            foreach (Profile p in profiles) box.Items.Add(p.Name);
-            int idx = 0;
-            for (int i = 1; i < box.Items.Count; i++)
-                if (string.Equals((string)box.Items[i], selected, StringComparison.OrdinalIgnoreCase)) idx = i;
-            box.SelectedIndex = idx;
-        }
-
-        private void OnAutoChanged(object sender, EventArgs e)
-        {
-            if (suppressAutoEvents) return;
-            settings.AutoSwitch = chkAuto.Checked;
-            settings.AcProfile = ComboValue(cmbAc);
-            settings.BatteryProfile = ComboValue(cmbBattery);
-            settings.Save();
-            comboKey = "";
-
-            PowerLineStatus now = SystemInformation.PowerStatus.PowerLineStatus;
-            Say(settings.AutoSwitch
-                ? "Đã bật tự đổi theo nguồn: cắm sạc → " + (settings.AcProfile.Length > 0 ? settings.AcProfile : NoChange)
-                    + ", dùng pin → " + (settings.BatteryProfile.Length > 0 ? settings.BatteryProfile : NoChange) + "."
-                : "Đã tắt tự đổi theo nguồn.", false);
-
-            // Apply right away only when the change concerns the power source in use now.
-            bool applyNow = settings.AutoSwitch
-                && (sender == chkAuto
-                    || (sender == cmbAc && now == PowerLineStatus.Online)
-                    || (sender == cmbBattery && now == PowerLineStatus.Offline));
-            CheckPowerSource(applyNow);
-        }
-
-        private void UpdatePowerLabel(PowerLineStatus now)
-        {
-            lblPower.Text = now == PowerLineStatus.Online ? "Đang cắm sạc"
-                : now == PowerLineStatus.Offline ? "Đang dùng pin" : "?";
-        }
-
-        // Applies the profile mapped to the current power source when the source changed (or when forced).
-        private void CheckPowerSource(bool force)
-        {
-            PowerLineStatus now = SystemInformation.PowerStatus.PowerLineStatus;
-            UpdatePowerLabel(now);
-            if (now == PowerLineStatus.Unknown) return;
-
-            bool changed = now != lastLine;
-            lastLine = now;
-            if (!settings.AutoSwitch || (!changed && !force)) return;
-
-            bool onAc = now == PowerLineStatus.Online;
-            string name = onAc ? settings.AcProfile : settings.BatteryProfile;
-            if (string.IsNullOrEmpty(name)) return;
-
-            foreach (Profile p in profiles)
-                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    ApplyProfile(p, true, onAc ? "Cắm sạc" : "Dùng pin");
-                    return;
-                }
-            Say("Không tìm thấy profile \"" + name + "\" đã chọn cho " + (onAc ? "cắm sạc" : "dùng pin") + ".", true);
-        }
-
-        private void StartService()
-        {
-            try
-            {
-                using (ServiceController sc = new ServiceController(Paths.ServiceName))
-                {
-                    sc.Start();
-                    sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(20));
-                }
-                Say("Đã khởi động dịch vụ XTU.", false);
-            }
-            catch (Exception ex) { Say("Không khởi động được dịch vụ: " + ex.Message, true); }
-            RefreshAll();
-        }
-    }
-
     internal static class Program
     {
         [STAThread]
@@ -1610,8 +653,8 @@ namespace XtuProfileSwitcher
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static int Run(string[] args)
         {
-            string outFile = null, applyName = null, startup = null;
-            bool status = false, listOnly = false, tray = false;
+            string outFile = null, applyName = null, startup = null, snap = null, dialog = null, langArg = null, themeArg = null;
+            bool status = false, listOnly = false, tray = false, offline = false;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--status") status = true;
@@ -1620,10 +663,39 @@ namespace XtuProfileSwitcher
                 else if (args[i] == "--apply" && i + 1 < args.Length) applyName = args[++i];
                 else if (args[i] == "--startup" && i + 1 < args.Length) startup = args[++i];
                 else if (args[i] == "--out" && i + 1 < args.Length) outFile = args[++i];
+                else if (args[i] == "--snapshot" && i + 1 < args.Length) snap = args[++i];
+                else if (args[i] == "--dialog" && i + 1 < args.Length) dialog = args[++i];
+                else if (args[i] == "--lang" && i + 1 < args.Length) langArg = args[++i];
+                else if (args[i] == "--theme" && i + 1 < args.Length) themeArg = args[++i];
+                else if (args[i] == "--offline") offline = true;
             }
+
+            AppSettings settings = AppSettings.Load();
+            Loc.Lang = (langArg ?? settings.Lang) == "vi" ? "vi" : "en";
+            Theme.Init(themeArg ?? settings.Theme);
+            Ui.InitScale();
 
             if (status || listOnly || applyName != null || startup != null)
                 return RunCli(status, listOnly, applyName, startup, outFile);
+
+            // --snapshot FILE [--dialog hotkey|profile] [--lang vi] [--theme dark|light]:
+            // draws the window off-screen into a PNG so the look can be checked without showing anything.
+            if (snap != null)
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                if (dialog == "hotkey")
+                    using (HotkeyDialog d = new HotkeyDialog("PL55-60W", "Ctrl+Alt+F2")) Ui.Snapshot(d, snap, d.ClientSize);
+                else if (dialog == "profile")
+                    using (ProfileDialog d = new ProfileDialog(new List<string>())) Ui.Snapshot(d, snap, d.ClientSize);
+                else
+                    using (MainForm f = new MainForm(false, null, true, settings))
+                    {
+                        f.SimulateOffline = offline;
+                        Ui.Snapshot(f, snap, new Size(Ui.S(640), Ui.S(800)));
+                    }
+                return 0;
+            }
 
             // One instance only: a second launch just brings the first one to the front.
             bool created;
@@ -1638,7 +710,7 @@ namespace XtuProfileSwitcher
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new MainForm(tray, showSignal));
+                Application.Run(new MainForm(tray, showSignal, false, settings));
                 GC.KeepAlive(mutex);
             }
             return 0;

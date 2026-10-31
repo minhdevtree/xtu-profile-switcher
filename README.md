@@ -7,6 +7,12 @@ Acer Predator Triton 500 SE (PT516-51s, i7-11800H, XTU 7.14.2.135, Windows 11).
 > interface and changes CPU power limits: use at your own risk, and test with a stress test first.
 > No Intel files are included; you need XTU installed.
 
+![The window, dark theme](docs/window-dark.png)
+
+The window follows the Windows light/dark setting (`docs/window-light.png` shows the light one).
+English is the default; the **EN · VI** switch in the top right changes the whole interface to Vietnamese
+and the choice is remembered.
+
 ## What it does
 
 - shows whether the `XTU3SERVICE` service is running and reachable
@@ -43,7 +49,7 @@ On first run these are created (`Ctrl+Alt+...`, so they differ from XTU's own `C
 | PL55-60W | Ctrl+Alt+F2 |
 | Default (BIOS) | Ctrl+Alt+Home |
 
-Select a profile and press "Gán phím tắt…" to change or clear one. Settings live in
+Select a profile and press **Set hotkey…** to change or clear one. Settings live in
 `%LOCALAPPDATA%\XtuProfileSwitcher\settings.ini`. A hotkey needs Ctrl or Alt.
 
 **Do not reuse the same keys as XTU's own Hotkey-Profile Pairing.** XTU listens with a global keyboard
@@ -54,15 +60,15 @@ The pop-up is a normal top-most window, so it will not show over an exclusive-fu
 
 ### Your own profiles
 
-"Thêm profile…" creates a profile (defaults to 35 W / 40 W / 56 s) that is stored in
-`settings.ini` and shown in the list as "tự tạo". It can have a hotkey and be used in the automatic
+**+ New profile** creates a profile (defaults to 35 W / 40 W / 56 s) that is stored in
+`settings.ini` and marked "custom" in the list. It can have a hotkey and be used in the automatic
 switch like any XTU profile. Only profiles created in this tool can be deleted from it. A name that
 XTU already uses wins over a tool profile with the same name.
 
 ### Automatic switch by power source
 
-Tick "Tự đổi profile khi đổi nguồn" and pick a profile for "Khi cắm sạc" and one for "Khi dùng pin"
-(or "(không đổi)" to leave a case alone). The tool applies the matching profile
+Turn on **Switch automatically by power source** and pick a profile for **When plugged in** and one for
+**On battery** (or **Leave as is** to leave a case alone). The tool applies the matching profile
 
 - at start,
 - when the power source changes (power event, with a 5 s poll as a backup),
@@ -76,8 +82,8 @@ unplugging.
 
 ### Start with Windows
 
-Tick "Mở cùng Windows" in the window. It creates a scheduled task (`XtuProfileSwitcher`) that runs the
-tool elevated 15 seconds after you log on, with `--tray`, and also on battery. Untick to remove it.
+Turn on **Start with Windows** in the window. It creates a scheduled task (`XtuProfileSwitcher`) that runs the
+tool elevated 15 seconds after you log on, with `--tray`, and also on battery. Turn it off to remove it.
 
 ## Command line (no window)
 
@@ -88,6 +94,10 @@ XtuProfileSwitcher.exe --apply "PL55-60W" [--out FILE]
 XtuProfileSwitcher.exe --startup on|off   [--out FILE]
 XtuProfileSwitcher.exe --tray              # start hidden in the tray
 ```
+
+`settings.ini` also takes `@lang` (`en` or `vi`) and `@theme` (`auto`, `light` or `dark`; `auto` follows
+Windows). To check the look without showing a window, `--snapshot FILE.png` draws it off-screen
+(`--lang vi`, `--theme light`, `--dialog hotkey|profile` and `--offline` change what is drawn).
 
 Exit codes: 0 ok, 1 failed, 2 profile not found. A log is kept in
 `%LOCALAPPDATA%\XtuProfileSwitcher\app.log`.
