@@ -20,7 +20,7 @@ namespace XtuProfileSwitcher
     internal static class Theme
     {
         public static bool Dark;
-        public static Color Ground, Raised, Line, Text, Sub, Ember, EmberDim, Track, Ok, Bad, InkBg, InkFg;
+        public static Color Ground, Raised, Line, Text, Sub, Ember, EmberDim, Track, Ok, Bad, InkBg, InkFg, Heat;
 
         public static void Init(string mode)
         {
@@ -39,7 +39,7 @@ namespace XtuProfileSwitcher
                 Ground = Rgb(0x15, 0x17, 0x1B); Raised = Rgb(0x1E, 0x21, 0x27); Line = Rgb(0x2C, 0x30, 0x38);
                 Text = Rgb(0xEA, 0xE8, 0xE2); Sub = Rgb(0x92, 0x99, 0xA6);
                 Ember = Rgb(0xF2, 0xA3, 0x3A); EmberDim = Rgb(0x6B, 0x4B, 0x1F); Track = Rgb(0x25, 0x29, 0x31);
-                Ok = Rgb(0x4F, 0xC3, 0xA1); Bad = Rgb(0xF0, 0x6B, 0x6B);
+                Ok = Rgb(0x4F, 0xC3, 0xA1); Bad = Rgb(0xF0, 0x6B, 0x6B); Heat = Rgb(0xF0, 0x7D, 0x6A);
                 InkBg = Rgb(0xEA, 0xE8, 0xE2); InkFg = Rgb(0x15, 0x17, 0x1B);
             }
             else
@@ -47,7 +47,7 @@ namespace XtuProfileSwitcher
                 Ground = Rgb(0xF4, 0xF2, 0xEC); Raised = Rgb(0xE9, 0xE6, 0xDD); Line = Rgb(0xD9, 0xD5, 0xC9);
                 Text = Rgb(0x1A, 0x1C, 0x20); Sub = Rgb(0x5F, 0x66, 0x72);
                 Ember = Rgb(0xB4, 0x50, 0x0A); EmberDim = Rgb(0xE6, 0xC7, 0xA3); Track = Rgb(0xE2, 0xDE, 0xD2);
-                Ok = Rgb(0x1B, 0x7F, 0x63); Bad = Rgb(0xC1, 0x30, 0x30);
+                Ok = Rgb(0x1B, 0x7F, 0x63); Bad = Rgb(0xC1, 0x30, 0x30); Heat = Rgb(0xC2, 0x43, 0x2A);
                 InkBg = Rgb(0x1A, 0x1C, 0x20); InkFg = Rgb(0xF4, 0xF2, 0xEC);
             }
         }
@@ -143,7 +143,10 @@ namespace XtuProfileSwitcher
         }
 
         // Renders a (hidden, off-screen) form to a PNG, for checking the look without touching the real screen.
-        public static void Snapshot(Form f, string file, Size client)
+        public static void Snapshot(Form f, string file, Size client) { Snapshot(f, file, client, 0, null); }
+
+        // warmupMs: keep the message loop running for a while first (live data needs time to arrive).
+        public static void Snapshot(Form f, string file, Size client, int warmupMs, Action beforeDraw)
         {
             f.StartPosition = FormStartPosition.Manual;
             f.ShowInTaskbar = false;
@@ -151,6 +154,9 @@ namespace XtuProfileSwitcher
             f.ClientSize = client;
             f.Show();
             Application.DoEvents();
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < warmupMs) { Application.DoEvents(); System.Threading.Thread.Sleep(40); }
+            if (beforeDraw != null) beforeDraw();
             f.Refresh();
             using (Bitmap bmp = new Bitmap(f.ClientSize.Width, f.ClientSize.Height))
             {
@@ -266,6 +272,7 @@ namespace XtuProfileSwitcher
         protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
         protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
         protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
+        // (Btn and Switch repaint on enable/disable; Dropdown does too, below.)
 
         protected override bool IsInputKey(Keys keyData) { return keyData == Keys.Enter || keyData == Keys.Space || base.IsInputKey(keyData); }
 
@@ -331,6 +338,7 @@ namespace XtuProfileSwitcher
         // Change the state without raising CheckedChanged (used when loading settings).
         public void Set(bool value) { on = value; Invalidate(); }
 
+        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
         protected override void OnClick(EventArgs e) { if (Enabled) Checked = !Checked; base.OnClick(e); }
         protected override bool IsInputKey(Keys keyData) { return keyData == Keys.Space || base.IsInputKey(keyData); }
         protected override void OnKeyDown(KeyEventArgs e) { if (e.KeyCode == Keys.Space) { OnClick(EventArgs.Empty); e.Handled = true; } base.OnKeyDown(e); }
@@ -342,14 +350,17 @@ namespace XtuProfileSwitcher
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+            // A disabled switch keeps its position but fades towards the background.
+            Color onC = Enabled ? Theme.Ember : Theme.Mix(Theme.Ember, Theme.Ground, 0.6);
+            Color knobC = on ? Theme.Ground : (Enabled ? Theme.Sub : Theme.Mix(Theme.Sub, Theme.Ground, 0.5));
             using (GraphicsPath p = Ui.Round(r, r.Height / 2))
             {
-                using (SolidBrush b = new SolidBrush(on ? Theme.Ember : Theme.Track)) g.FillPath(b, p);
+                using (SolidBrush b = new SolidBrush(on ? onC : Theme.Track)) g.FillPath(b, p);
                 if (!on) using (Pen pen = new Pen(Theme.Line)) g.DrawPath(pen, p);
             }
             float d = r.Height - Ui.S(8f);
             float x = on ? r.Right - d - Ui.S(4f) : r.Left + Ui.S(4f);
-            Ui.Dot(g, on ? Theme.Ground : Theme.Sub, x + d / 2, r.Top + r.Height / 2, d);
+            Ui.Dot(g, knobC, x + d / 2, r.Top + r.Height / 2, d);
             if (Focused && ShowFocusCues) FocusRing(g, new Rectangle(0, 0, Width - 1, Height - 1), Height / 2f);
         }
     }
@@ -379,6 +390,7 @@ namespace XtuProfileSwitcher
         protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
         protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
         protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
         protected override bool IsInputKey(Keys keyData) { return keyData == Keys.Enter || keyData == Keys.Space || keyData == Keys.Down || base.IsInputKey(keyData); }
 
         protected override void OnKeyDown(KeyEventArgs e)
@@ -416,11 +428,11 @@ namespace XtuProfileSwitcher
             Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
             using (GraphicsPath p = Ui.Round(r, Ui.S(6)))
             {
-                using (SolidBrush b = new SolidBrush(Theme.Raised)) g.FillPath(b, p);
-                using (Pen pen = new Pen(hover ? Theme.Sub : Theme.Line)) g.DrawPath(pen, p);
+                using (SolidBrush b = new SolidBrush(Enabled ? Theme.Raised : Theme.Ground)) g.FillPath(b, p);
+                using (Pen pen = new Pen(hover && Enabled ? Theme.Sub : Theme.Line)) g.DrawPath(pen, p);
             }
             string t = idx >= 0 && idx < Items.Count ? Items[idx] : "";
-            Ui.Text(g, t, Theme.Body(9.5f), Enabled ? Theme.Text : Theme.Sub, new Rectangle(Ui.S(12), 0, Width - Ui.S(40), Height), TextFormatFlags.Left);
+            Ui.Text(g, t, Theme.Body(9.5f), Enabled ? Theme.Text : Theme.Mix(Theme.Sub, Theme.Ground, 0.4), new Rectangle(Ui.S(12), 0, Width - Ui.S(40), Height), TextFormatFlags.Left);
             float cx = Width - Ui.S(18f), cy = Height / 2f;
             using (Pen pen = new Pen(Theme.Sub, 1.6f))
             {

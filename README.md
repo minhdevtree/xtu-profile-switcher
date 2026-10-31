@@ -8,11 +8,12 @@ Acer Predator Triton 500 SE (PT516-51s, i7-11800H, XTU 7.14.2.135, Windows 11).
 > No Intel files are included; you need XTU installed.
 
 ![Profiles tab, dark theme](docs/window-dark.png)
+![Monitor tab, dark theme](docs/monitor-dark.png)
 ![Settings tab, dark theme](docs/settings-dark.png)
 
 **Click a profile to apply it.** The "..." at the end of a row (or a right-click) opens the secondary
 actions: set a hotkey, and delete for profiles made in this tool. The readout on top stays visible on
-both tabs. The window follows the Windows light/dark setting (`docs/window-light.png` shows the light one).
+every tab. The window follows the Windows light/dark setting (`docs/window-light.png` shows the light one).
 English is the default; the **EN · VI** switch in the top right changes the whole interface to Vietnamese
 and the choice is remembered.
 
@@ -26,6 +27,46 @@ and the choice is remembered.
 - profiles you create in the tool itself (name, PL1, PL2, time window), no need to use XTU's UI
 - optional automatic switch between two profiles when the power source changes (plugged in / battery)
 - optional "start with Windows", hidden in the tray
+- live **Monitor** tab (temperature, CPU power, CPU usage, clock, throttling) and **recording to CSV** for later analysis
+
+## Monitor and recording
+
+The **Monitor** tab shows the last minutes of CPU temperature, CPU package power (with the PL1 limit as a
+dashed line) and CPU usage, plus clock, hottest core, NVIDIA GPU temperature/power and any throttling.
+It only samples while the tab is visible.
+
+**Record to CSV** writes one row per sample to `Documents\XtuProfileSwitcher\logs\xtu-log-YYYY-MM-DD_HH-mm-ss.csv`.
+Choose the sample interval (1 s to 60 s), how long to record (until stopped, or 5 min to 8 h) and whether
+to include per-core and NVIDIA GPU columns. Recording keeps running with the window closed to the tray, can
+be started and stopped from the tray menu, and is finished cleanly when the app exits.
+
+Next to each CSV there is a `<name>.meta.json` with the machine, XTU version, interval, row count and the
+column list. The CSV is plain UTF-8, comma separated, one header row, ISO-8601 timestamps with a UTC offset,
+one flush per row (so a crash loses at most one row). An empty cell means the value was not available.
+
+| Group | Columns |
+| --- | --- |
+| time and context | `timestamp`, `elapsed_s`, `status`, `profile`, `pl1_w`, `pl2_w`, `power_source`, `battery_pct`, `battery_discharge_w`, `battery_charge_w` |
+| CPU | `pkg_temp_c`, `core_temp_max_c`, `cpu_util_pct`, `mem_util_pct`, `pkg_power_w`, `core_power_w`, `igpu_power_w`, `cpu_freq_max_ghz`, `uncore_ghz`, `active_cores`, `ref_clock_mhz`, `mem_speed_mts`, `igpu_freq_mhz`, `igpu_temp_c`, `igpu_volt_v`, `cache_volt_v`, `sa_volt_v` |
+| throttling | `thermal_throttle_pct`, `power_throttle_pct`, `current_throttle_pct`, `vr_throttle_pct` |
+| per core (optional) | `core0_temp_c`, `core0_freq_ghz`, `core0_volt_v`, `core0_util_pct` ... for every core |
+| NVIDIA GPU (optional) | `gpu_temp_c`, `gpu_power_w`, `gpu_util_pct`, `gpu_clock_mhz`, `gpu_mem_clock_mhz` |
+
+Notes:
+
+- CPU values come from the XTU service, which refreshes about once a second, so sampling faster than 1 s only
+  repeats values. Readings that are still stale right after the monitor starts are skipped.
+- `pl1_w`, `pl2_w` and `profile` are re-read every 5 s, so after a profile change they update in the next row after that.
+- NVIDIA values are read through `nvml.dll`. Polling the GPU can keep a sleeping dGPU awake, which costs battery;
+  turn **NVIDIA GPU columns** off for long battery recordings.
+- With all 68 columns (8 cores, GPU on) one hour at 1 s is about 1 MB.
+
+Without a window:
+
+```text
+XtuProfileSwitcher.exe --log FILE.csv --minutes 30 [--every 2] [--no-percore] [--no-gpu]
+XtuProfileSwitcher.exe --log FILE.csv --seconds 90
+```
 
 ## Build
 
@@ -95,11 +136,12 @@ XtuProfileSwitcher.exe --list   [--out FILE]
 XtuProfileSwitcher.exe --apply "PL55-60W" [--out FILE]
 XtuProfileSwitcher.exe --startup on|off   [--out FILE]
 XtuProfileSwitcher.exe --tray              # start hidden in the tray
+XtuProfileSwitcher.exe --log FILE.csv --minutes N   # record without a window (see above)
 ```
 
 `settings.ini` also takes `@lang` (`en` or `vi`) and `@theme` (`auto`, `light` or `dark`; `auto` follows
 Windows). To check the look without showing a window, `--snapshot FILE.png` draws it off-screen
-(`--lang vi`, `--theme light`, `--tab settings`, `--dialog hotkey|profile` and `--offline` change what is
+(`--lang vi`, `--theme light`, `--tab profiles|monitor|settings`, `--record`, `--warmup SECONDS`, `--dialog hotkey|profile` and `--offline` change what is
 drawn; `--click NAME` clicks that row first, which really applies it, as a self-test).
 
 Exit codes: 0 ok, 1 failed, 2 profile not found. A log is kept in

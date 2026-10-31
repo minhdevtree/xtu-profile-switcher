@@ -53,7 +53,46 @@ namespace XtuProfileSwitcher
 
             // profile table
             A("tab.profiles", "Profiles", "Profile");
+            A("tab.monitor", "Monitor", "Giám sát");
             A("tab.settings", "Settings", "Cài đặt");
+
+            // monitor tab and recording
+            A("mon.temp", "CPU temperature", "Nhiệt độ CPU");
+            A("mon.power", "CPU power", "Công suất CPU");
+            A("mon.usage", "CPU usage", "Mức dùng CPU");
+            A("mon.span", "{0} min ago", "{0} phút trước");
+            A("mon.now", "now", "hiện tại");
+            A("mon.pl1", "PL1 {0} W", "PL1 {0} W");
+            A("mon.clock", "Clock", "Xung");
+            A("mon.coremax", "hottest core", "lõi nóng nhất");
+            A("mon.gpu", "GPU", "GPU");
+            A("mon.throttle", "Throttling", "Throttle");
+            A("mon.none", "none", "không");
+            A("mon.thermal", "thermal", "nhiệt");
+            A("mon.powerlimit", "power limit", "giới hạn công suất");
+            A("mon.current", "current limit", "giới hạn dòng");
+            A("mon.vr", "VR", "VR");
+            A("mon.waiting", "Waiting for readings…", "Đang chờ số liệu…");
+            A("rec.title", "Record to CSV", "Ghi ra CSV");
+            A("rec.every", "Sample every", "Lấy mẫu mỗi");
+            A("rec.for", "Stop after", "Dừng sau");
+            A("rec.start", "Start recording", "Bắt đầu ghi");
+            A("rec.stop", "Stop recording", "Dừng ghi");
+            A("rec.percore", "Per-core columns", "Cột từng lõi");
+            A("rec.gpu", "NVIDIA GPU columns", "Cột GPU NVIDIA");
+            A("rec.status", "Recording · {0} · {1} rows", "Đang ghi · {0} · {1} dòng");
+            A("rec.saved", "Saved {0} rows", "Đã lưu {0} dòng");
+            A("rec.idle", "Writes one row per sample, plus a .meta.json that describes the columns.", "Mỗi mẫu một dòng, kèm file .meta.json mô tả các cột.");
+            A("rec.open", "Open folder", "Mở thư mục");
+            A("rec.untilstopped", "Until I stop it", "Đến khi tôi dừng");
+            A("rec.s", "{0} s", "{0} giây");
+            A("rec.min", "{0} min", "{0} phút");
+            A("rec.h", "{0} h", "{0} giờ");
+            A("rec.err", "Couldn't start recording. {0}", "Không bắt đầu ghi được. {0}");
+            A("rec.osd.start", "Recording started", "Đã bắt đầu ghi");
+            A("rec.osd.saved", "Recording saved", "Đã lưu bản ghi");
+            A("tray.rec.start", "Start recording", "Bắt đầu ghi");
+            A("tray.rec.stop", "Stop recording", "Dừng ghi");
             A("pr.new", "New profile", "Profile mới");
             A("col.name", "Name", "Tên");
             A("col.pl1", "PL1 W", "PL1 W");

@@ -24,7 +24,7 @@ if (-not (Test-Path $icon)) { & (Join-Path $here 'make-icon.ps1') }
     "/win32icon:$icon" `
     "/resource:$icon,XtuProfileSwitcher.app.ico" `
     /r:System.dll /r:System.Core.dll /r:System.Xml.dll /r:System.Drawing.dll `
-    /r:System.Windows.Forms.dll /r:System.ServiceModel.dll /r:System.ServiceProcess.dll `
+    /r:System.Windows.Forms.dll /r:System.ServiceModel.dll /r:System.ServiceProcess.dll /r:System.Management.dll `
     "/r:$xtu\XtuInterface.dll" "/r:$xtu\XtuCommon.dll" `
     $sources
 

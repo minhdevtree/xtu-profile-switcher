@@ -229,6 +229,10 @@ namespace XtuProfileSwitcher
         public string Theme = "auto";     // "auto" (follow Windows) | "light" | "dark"
         public string AcProfile = "";
         public string BatteryProfile = "";
+        public int RecEvery = 1;          // seconds between rows
+        public int RecMinutes = 0;        // 0 = until stopped
+        public bool RecPerCore = true;
+        public bool RecGpu = true;
 
         public static AppSettings Load()
         {
@@ -253,6 +257,10 @@ namespace XtuProfileSwitcher
                 else if (tag == "@battery") s.BatteryProfile = f[1].Trim();
                 else if (tag == "@lang") s.Lang = f[1].Trim() == "vi" ? "vi" : "en";
                 else if (tag == "@theme") s.Theme = (f[1].Trim() == "light" || f[1].Trim() == "dark") ? f[1].Trim() : "auto";
+                else if (tag == "@rec.every") { int v; if (int.TryParse(f[1].Trim(), out v) && v >= 1 && v <= 3600) s.RecEvery = v; }
+                else if (tag == "@rec.minutes") { int v; if (int.TryParse(f[1].Trim(), out v) && v >= 0 && v <= 10080) s.RecMinutes = v; }
+                else if (tag == "@rec.percore") s.RecPerCore = f[1].Trim() != "0";
+                else if (tag == "@rec.gpu") s.RecGpu = f[1].Trim() != "0";
                 else if (tag == "@custom" && f.Length >= 5)
                 {
                     Profile p = new Profile();
@@ -280,6 +288,10 @@ namespace XtuProfileSwitcher
             if (Theme != "auto") lines.Add("@theme\t" + Theme);
             if (AcProfile.Length > 0) lines.Add("@ac\t" + AcProfile);
             if (BatteryProfile.Length > 0) lines.Add("@battery\t" + BatteryProfile);
+            lines.Add("@rec.every\t" + RecEvery);
+            lines.Add("@rec.minutes\t" + RecMinutes);
+            lines.Add("@rec.percore\t" + (RecPerCore ? "1" : "0"));
+            lines.Add("@rec.gpu\t" + (RecGpu ? "1" : "0"));
             foreach (Profile p in Customs)
                 lines.Add("@custom\t" + p.Name + "\t" + p.Pl1.ToString(inv) + "\t" + p.Pl2.ToString(inv) + "\t" + p.Window.ToString(inv));
             File.WriteAllLines(Paths.SettingsFile, lines.ToArray(), Encoding.UTF8);
@@ -654,8 +666,10 @@ namespace XtuProfileSwitcher
         private static int Run(string[] args)
         {
             string outFile = null, applyName = null, startup = null, snap = null, dialog = null, langArg = null, themeArg = null;
-            string tabArg = null, clickArg = null;
-            bool status = false, listOnly = false, tray = false, offline = false;
+            string tabArg = null, clickArg = null, logPath = null;
+            double minutesArg = 0;
+            int everyArg = 0, warmupSec = 0;
+            bool status = false, listOnly = false, tray = false, offline = false, recordDemo = false, noPerCore = false, noGpu = false;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--status") status = true;
@@ -671,6 +685,14 @@ namespace XtuProfileSwitcher
                 else if (args[i] == "--offline") offline = true;
                 else if (args[i] == "--tab" && i + 1 < args.Length) tabArg = args[++i];
                 else if (args[i] == "--click" && i + 1 < args.Length) clickArg = args[++i];
+                else if (args[i] == "--record") recordDemo = true;
+                else if (args[i] == "--warmup" && i + 1 < args.Length) int.TryParse(args[++i], out warmupSec);
+                else if (args[i] == "--log" && i + 1 < args.Length) logPath = args[++i];
+                else if (args[i] == "--every" && i + 1 < args.Length) int.TryParse(args[++i], out everyArg);
+                else if (args[i] == "--minutes" && i + 1 < args.Length) double.TryParse(args[++i], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out minutesArg);
+                else if (args[i] == "--seconds" && i + 1 < args.Length) { double sec; if (double.TryParse(args[++i], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out sec)) minutesArg = sec / 60.0; }
+                else if (args[i] == "--no-percore") noPerCore = true;
+                else if (args[i] == "--no-gpu") noGpu = true;
             }
 
             AppSettings settings = AppSettings.Load();
@@ -680,6 +702,9 @@ namespace XtuProfileSwitcher
 
             if (status || listOnly || applyName != null || startup != null)
                 return RunCli(status, listOnly, applyName, startup, outFile);
+
+            if (logPath != null)
+                return RunLog(logPath, everyArg > 0 ? everyArg : settings.RecEvery, minutesArg, !noPerCore, !noGpu, outFile, settings);
 
             // --snapshot FILE [--dialog hotkey|profile] [--lang vi] [--theme dark|light]:
             // draws the window off-screen into a PNG so the look can be checked without showing anything.
@@ -695,9 +720,13 @@ namespace XtuProfileSwitcher
                     using (MainForm f = new MainForm(false, null, true, settings))
                     {
                         f.SimulateOffline = offline;
-                        f.PreviewTab = tabArg == "settings" ? 1 : 0;
+                        f.PreviewTab = tabArg == "monitor" ? 1 : tabArg == "settings" ? 2 : 0;
                         f.PreviewClick = clickArg;
-                        Ui.Snapshot(f, snap, new Size(Ui.S(640), Ui.S(640)));
+                        string demo = Path.Combine(Path.GetTempPath(), "xtu-preview-" + Guid.NewGuid().ToString("N") + ".csv");
+                        f.PreviewRecord = recordDemo;
+                        f.PreviewRecordPath = demo;
+                        // The monitor tab needs a few seconds of live readings before it has anything to draw.
+                        Ui.Snapshot(f, snap, new Size(Ui.S(640), Ui.S(700)), f.PreviewTab == 1 ? Math.Max(7, warmupSec) * 1000 : 0, delegate { f.PreviewUpdate(); });
                     }
                 return 0;
             }
@@ -719,6 +748,39 @@ namespace XtuProfileSwitcher
                 GC.KeepAlive(mutex);
             }
             return 0;
+        }
+
+        // --log FILE (--minutes N | --seconds N) [--every S] [--no-percore] [--no-gpu]: records without a window.
+        private static int RunLog(string path, int every, double minutes, bool perCore, bool gpu, string outFile, AppSettings settings)
+        {
+            StringBuilder sb = new StringBuilder();
+            int code = 0;
+            if (minutes <= 0) { sb.AppendLine("log: give a duration with --minutes N or --seconds N"); code = 2; }
+            else
+            {
+                try
+                {
+                    using (MonitorService svc = new MonitorService())
+                    using (XtuClient c = new XtuClient())
+                    {
+                        Snapshot s = Model.Read(c);
+                        svc.Profiles = Model.LoadProfiles(s, settings.Customs);
+                        ManualResetEvent done = new ManualResetEvent(false);
+                        svc.RecordingEnded += delegate { done.Set(); };
+                        svc.StartRecording(path, every, minutes, perCore, gpu);
+                        sb.AppendLine("recording to " + path);
+                        done.WaitOne(TimeSpan.FromMinutes(minutes) + TimeSpan.FromSeconds(30));
+                        long rows;
+                        svc.StopRecording(out rows);
+                        sb.AppendLine("rows: " + (rows > 0 ? rows : svc.LastRows));
+                    }
+                }
+                catch (Exception ex) { sb.AppendLine("log failed: " + ex.Message); code = 1; }
+            }
+            string text = sb.ToString();
+            Log.Write("CLI --log " + path + Environment.NewLine + text);
+            if (outFile != null) File.WriteAllText(outFile, text, Encoding.UTF8);
+            return code;
         }
 
         private static int RunCli(bool status, bool listOnly, string applyName, string startup, string outFile)

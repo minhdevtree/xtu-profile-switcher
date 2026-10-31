@@ -1,13 +1,16 @@
 // The main window and the tray icon. All window text comes from Loc; all colours from Theme.
 //
-// Layout: top bar, the readout (always visible), then two tabs.
+// Layout: top bar, the readout (always visible), then three tabs.
 //   Profiles: the table; click a row to apply it, "..." for hotkey / delete.
+//   Monitor:  temperature, power and CPU use over the last 5 minutes, and recording to CSV.
 //   Settings: automatic switch by power source, start with Windows, system facts.
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using System.Text;
@@ -20,6 +23,8 @@ namespace XtuProfileSwitcher
     internal sealed class MainForm : Form
     {
         private const int WmHotkey = 0x0312;
+        private static readonly int[] EverySeconds = { 1, 2, 5, 10, 30, 60 };
+        private static readonly int[] StopAfterMinutes = { 0, 5, 15, 30, 60, 120, 240, 480 };
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -28,10 +33,12 @@ namespace XtuProfileSwitcher
         private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
         private readonly XtuClient client = new XtuClient();
+        private readonly MonitorService monitor = new MonitorService();
         private readonly AppSettings settings;
         private readonly bool preview;
         private readonly NotifyIcon tray = new NotifyIcon();
         private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer monTimer = new System.Windows.Forms.Timer();
         private readonly System.Windows.Forms.Timer resumeTimer = new System.Windows.Forms.Timer();
 
         private readonly TopBar top = new TopBar();
@@ -39,6 +46,26 @@ namespace XtuProfileSwitcher
         private readonly TabStrip tabs = new TabStrip();
         private readonly Btn btnNew = new Btn();
         private readonly ProfileTable table = new ProfileTable();
+
+        // monitor page
+        private readonly SeriesRow rowTemp = new SeriesRow();
+        private readonly SeriesRow rowPower = new SeriesRow();
+        private readonly SeriesRow rowUsage = new SeriesRow();
+        private readonly Label lblDetails = new Label();
+        private readonly Label recTitle = new Label();
+        private readonly Label capEvery = new Label();
+        private readonly Label capFor = new Label();
+        private readonly Dropdown ddEvery = new Dropdown();
+        private readonly Dropdown ddFor = new Dropdown();
+        private readonly Switch swCore = new Switch();
+        private readonly Switch swGpu = new Switch();
+        private readonly Label lblCore = new Label();
+        private readonly Label lblGpu = new Label();
+        private readonly Btn btnRec = new Btn();
+        private readonly Label lblRec = new Label();
+        private readonly Btn btnOpen = new Btn();
+
+        // settings page
         private readonly Label autoTitle = new Label();
         private readonly Label autoDesc = new Label();
         private readonly Switch swAuto = new Switch();
@@ -57,18 +84,20 @@ namespace XtuProfileSwitcher
         private Snapshot last = new Snapshot();
         private readonly Dictionary<int, string> registered = new Dictionary<int, string>();
         private PowerLineStatus lastLine = PowerLineStatus.Unknown;
-        private bool reallyExit, startHidden, busy, inited, suppress;
+        private bool reallyExit, startHidden, busy, inited, suppress, monRetained;
         private int tick, ruleSettings, statusY;
         private bool statusError;
         private string comboKey = "";
 
         private Dictionary<string, string> hotkeys { get { return settings.Hotkeys; } }
-        private bool OnProfilesTab { get { return tabs.SelectedIndex == 0; } }
+        private int Page { get { return tabs.SelectedIndex; } }
 
-        // Preview only (--snapshot --offline / --tab settings): draw a state that is hard to reach on demand.
+        // Preview only (--snapshot ...): draw states that are hard to reach on demand.
         public bool SimulateOffline;
         public int PreviewTab;
         public string PreviewClick;
+        public bool PreviewRecord;
+        public string PreviewRecordPath = "";
 
         public MainForm(bool startHidden, EventWaitHandle showSignal, bool preview, AppSettings settings)
         {
@@ -83,9 +112,9 @@ namespace XtuProfileSwitcher
             ForeColor = Theme.Text;
             StartPosition = FormStartPosition.CenterScreen;
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-            int h = Math.Min(Ui.S(640), (int)(wa.Height * 0.92) - Ui.S(48));
-            ClientSize = new Size(Ui.S(640), Math.Max(Ui.S(520), h));
-            MinimumSize = SizeFromClientSize(new Size(Ui.S(600), Ui.S(520)));
+            int h = Math.Min(Ui.S(700), (int)(wa.Height * 0.92) - Ui.S(48));
+            ClientSize = new Size(Ui.S(640), Math.Max(Ui.S(560), h));
+            MinimumSize = SizeFromClientSize(new Size(Ui.S(600), Ui.S(560)));
 
             top.LanguageChosen += delegate (object s, LangEventArgs e) { SetLanguage(e.Lang); };
             Controls.Add(top);
@@ -101,6 +130,136 @@ namespace XtuProfileSwitcher
             table.MenuRequested += delegate (object s, RowEventArgs e) { ShowRowMenu(e.Row, e.Anchor); };
             Controls.Add(table);
 
+            BuildMonitorPage();
+            BuildSettingsPage();
+
+            StyleLabel(statusLabel, false, 9.5f);
+            statusLabel.ForeColor = Theme.Sub;
+            Controls.Add(statusLabel);
+
+            tray.Icon = AppIcon.Load(SystemInformation.SmallIconSize.Width);
+            tray.Visible = !preview;
+            tray.DoubleClick += delegate { ShowWindow(); };
+
+            timer.Interval = 5000;
+            timer.Tick += delegate
+            {
+                // Refresh less often while hidden in the tray; the power check is cheap.
+                tick++;
+                if (Visible || tick % 3 == 0)
+                {
+                    RefreshAll();
+                    monitor.Profiles = profiles;
+                }
+                CheckPowerSource(false);
+            };
+            monTimer.Interval = 1000;
+            monTimer.Tick += delegate { UpdateMonitorUi(); };
+            resumeTimer.Interval = 4000;
+            resumeTimer.Tick += delegate { resumeTimer.Stop(); CheckPowerSource(true); };
+            if (!preview) SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            monitor.RecordingEnded += delegate
+            {
+                try { if (IsHandleCreated) BeginInvoke(new Action(OnRecordingEnded)); } catch { }
+            };
+
+            Load += delegate { Init(); };
+            FormClosing += OnFormClosing;
+            Resize += delegate { if (WindowState == FormWindowState.Minimized) Hide(); };
+            SizeChanged += delegate { Relayout(); };
+            VisibleChanged += delegate { UpdateMonitorSubscription(); };
+
+            if (showSignal != null)
+            {
+                ThreadPool.RegisterWaitForSingleObject(showSignal, delegate
+                {
+                    try { if (IsHandleCreated) BeginInvoke(new Action(ShowWindow)); } catch { }
+                }, null, -1, false);
+            }
+
+            ApplyTexts();
+            Relayout();
+        }
+
+        private static void StyleLabel(Label l, bool strong, float pt)
+        {
+            l.AutoSize = false;
+            l.BackColor = Theme.Ground;
+            l.ForeColor = Theme.Text;
+            l.Font = strong ? Theme.Strong(pt) : Theme.Body(pt);
+            l.TextAlign = ContentAlignment.MiddleLeft;
+            l.UseMnemonic = false;
+        }
+
+        private void BuildMonitorPage()
+        {
+            rowTemp.Hue = Theme.Heat;
+            rowTemp.Lo = 20; rowTemp.Hi = 100;
+            rowPower.Hue = Theme.Ember;
+            rowPower.AutoHi = true;
+            rowUsage.Hue = Theme.Text;
+            rowUsage.Lo = 0; rowUsage.Hi = 100;
+            Controls.Add(rowTemp);
+            Controls.Add(rowPower);
+            Controls.Add(rowUsage);
+
+            StyleLabel(lblDetails, false, 9f);
+            lblDetails.ForeColor = Theme.Sub;
+            Controls.Add(lblDetails);
+
+            StyleLabel(recTitle, true, 10.5f);
+            StyleLabel(capEvery, false, 9.5f);
+            capEvery.ForeColor = Theme.Sub;
+            StyleLabel(capFor, false, 9.5f);
+            capFor.ForeColor = Theme.Sub;
+            StyleLabel(lblCore, false, 9.5f);
+            StyleLabel(lblGpu, false, 9.5f);
+            StyleLabel(lblRec, false, 9.5f);
+            lblRec.ForeColor = Theme.Sub;
+            Controls.Add(recTitle);
+            Controls.Add(capEvery);
+            Controls.Add(capFor);
+            Controls.Add(lblCore);
+            Controls.Add(lblGpu);
+            Controls.Add(lblRec);
+
+            ddEvery.SelectionChanged += delegate
+            {
+                if (suppress) return;
+                settings.RecEvery = EverySeconds[Math.Max(0, ddEvery.SelectedIndex)];
+                settings.Save();
+            };
+            ddFor.SelectionChanged += delegate
+            {
+                if (suppress) return;
+                settings.RecMinutes = StopAfterMinutes[Math.Max(0, ddFor.SelectedIndex)];
+                settings.Save();
+            };
+            swCore.CheckedChanged += delegate { if (suppress) return; settings.RecPerCore = swCore.Checked; settings.Save(); };
+            swGpu.CheckedChanged += delegate
+            {
+                if (suppress) return;
+                settings.RecGpu = swGpu.Checked;
+                monitor.IncludeGpu = swGpu.Checked;
+                settings.Save();
+            };
+            Controls.Add(ddEvery);
+            Controls.Add(ddFor);
+            Controls.Add(swCore);
+            Controls.Add(swGpu);
+
+            btnRec.Kind = BtnKind.Primary;
+            btnRec.Click += delegate { ToggleRecording(); };
+            Controls.Add(btnRec);
+            btnOpen.Kind = BtnKind.Quiet;
+            btnOpen.Click += delegate { OpenLogFolder(); };
+            Controls.Add(btnOpen);
+
+            monitor.IncludeGpu = settings.RecGpu;
+        }
+
+        private void BuildSettingsPage()
+        {
             StyleLabel(autoTitle, true, 10.5f);
             StyleLabel(autoDesc, false, 9.5f);
             autoDesc.ForeColor = Theme.Sub;
@@ -130,62 +289,23 @@ namespace XtuProfileSwitcher
             btnStartSvc.Kind = BtnKind.Secondary;
             btnStartSvc.Click += delegate { StartService(); };
             Controls.Add(btnStartSvc);
-
-            StyleLabel(statusLabel, false, 9.5f);
-            statusLabel.ForeColor = Theme.Sub;
-            Controls.Add(statusLabel);
-
-            tray.Icon = AppIcon.Load(SystemInformation.SmallIconSize.Width);
-            tray.Visible = !preview;
-            tray.DoubleClick += delegate { ShowWindow(); };
-
-            timer.Interval = 5000;
-            timer.Tick += delegate
-            {
-                // Refresh less often while hidden in the tray; the power check is cheap.
-                tick++;
-                if (Visible || tick % 3 == 0) RefreshAll();
-                CheckPowerSource(false);
-            };
-            resumeTimer.Interval = 4000;
-            resumeTimer.Tick += delegate { resumeTimer.Stop(); CheckPowerSource(true); };
-            if (!preview) SystemEvents.PowerModeChanged += OnPowerModeChanged;
-
-            Load += delegate { Init(); };
-            FormClosing += OnFormClosing;
-            Resize += delegate { if (WindowState == FormWindowState.Minimized) Hide(); };
-            SizeChanged += delegate { Relayout(); };
-
-            if (showSignal != null)
-            {
-                ThreadPool.RegisterWaitForSingleObject(showSignal, delegate
-                {
-                    try { if (IsHandleCreated) BeginInvoke(new Action(ShowWindow)); } catch { }
-                }, null, -1, false);
-            }
-
-            ApplyTexts();
-            Relayout();
-        }
-
-        private static void StyleLabel(Label l, bool strong, float pt)
-        {
-            l.AutoSize = false;
-            l.BackColor = Theme.Ground;
-            l.ForeColor = Theme.Text;
-            l.Font = strong ? Theme.Strong(pt) : Theme.Body(pt);
-            l.TextAlign = ContentAlignment.MiddleLeft;
-            l.UseMnemonic = false;
         }
 
         // ---- text, pages and layout -------------------------------------------------------------
 
+        private static string EveryText(int s) { return s < 60 ? Loc.F("rec.s", s) : Loc.F("rec.min", s / 60); }
+
+        private static string StopText(int m)
+        {
+            return m == 0 ? Loc.T("rec.untilstopped") : m < 60 ? Loc.F("rec.min", m) : Loc.F("rec.h", m / 60);
+        }
+
         private void ApplyTexts()
         {
             Text = "XTU Profile Switcher";
-            int keep = tabs.SelectedIndex;
             tabs.Items.Clear();
             tabs.Items.Add(Loc.T("tab.profiles"));
+            tabs.Items.Add(Loc.T("tab.monitor"));
             tabs.Items.Add(Loc.T("tab.settings"));
             btnNew.Text = "+  " + Loc.T("pr.new");
             autoTitle.Text = Loc.T("auto.title");
@@ -195,23 +315,60 @@ namespace XtuProfileSwitcher
             suTitle.Text = Loc.T("su.title");
             suDesc.Text = Loc.T("su.desc");
             btnStartSvc.Text = Loc.T("btn.startsvc");
+
+            rowTemp.Title = Loc.T("mon.temp");
+            rowPower.Title = Loc.T("mon.power");
+            rowUsage.Title = Loc.T("mon.usage");
+            foreach (SeriesRow r in new SeriesRow[] { rowTemp, rowPower, rowUsage })
+            {
+                r.SpanLabel = Loc.F("mon.span", 5);
+                r.NowLabel = Loc.T("mon.now");
+            }
+            rowTemp.Unit = "°C"; rowPower.Unit = "W"; rowUsage.Unit = "%";
+            recTitle.Text = Loc.T("rec.title");
+            capEvery.Text = Loc.T("rec.every");
+            capFor.Text = Loc.T("rec.for");
+            lblCore.Text = Loc.T("rec.percore");
+            lblGpu.Text = Loc.T("rec.gpu");
+            btnOpen.Text = Loc.T("rec.open");
+
+            suppress = true;
+            try
+            {
+                int ie = Array.IndexOf(EverySeconds, settings.RecEvery), im = Array.IndexOf(StopAfterMinutes, settings.RecMinutes);
+                ddEvery.Items.Clear();
+                foreach (int s in EverySeconds) ddEvery.Items.Add(EveryText(s));
+                ddEvery.SelectedIndex = ie < 0 ? 0 : ie;
+                ddFor.Items.Clear();
+                foreach (int m in StopAfterMinutes) ddFor.Items.Add(StopText(m));
+                ddFor.SelectedIndex = im < 0 ? 0 : im;
+                swCore.Set(settings.RecPerCore);
+                swGpu.Set(settings.RecGpu);
+            }
+            finally { suppress = false; }
+
             comboKey = "";
             tabs.Invalidate();
             top.Invalidate();
             table.Invalidate();
             readout.Invalidate();
+            UpdateRecordingUi();
             ShowPage();
         }
 
         // Show the controls of the current tab only.
         private void ShowPage()
         {
-            bool prof = OnProfilesTab;
-            table.Visible = prof;
-            btnNew.Visible = prof;
+            int p = Page;
+            table.Visible = p == 0;
+            btnNew.Visible = p == 0;
+            foreach (Control c in new Control[] { rowTemp, rowPower, rowUsage, lblDetails, recTitle, capEvery, capFor, ddEvery, ddFor, swCore, swGpu, lblCore, lblGpu, btnRec, lblRec })
+                c.Visible = p == 1;
+            btnOpen.Visible = p == 1 && monitor.LastPath.Length > 0;
             foreach (Control c in new Control[] { autoTitle, autoDesc, lblAc, lblBat, swAuto, ddAc, ddBat, suTitle, suDesc, swStartup, lblFacts })
-                c.Visible = !prof;
-            btnStartSvc.Visible = !prof && last.ServiceState != "Running";
+                c.Visible = p == 2;
+            btnStartSvc.Visible = p == 2 && last.ServiceState != "Running";
+            UpdateMonitorSubscription();
             Invalidate();
         }
 
@@ -234,6 +391,32 @@ namespace XtuProfileSwitcher
 
             // profiles tab
             table.SetBounds(m, pageTop, cw, Math.Max(Ui.S(100), pageBottom - pageTop));
+
+            // monitor tab: three charts share what is left above the recording block
+            int recH = Ui.S(150), detailsH = Ui.S(22), gaps = Ui.S(14);
+            int chartsH = Math.Max(Ui.S(3 * 56), pageBottom - pageTop - recH - detailsH - gaps);
+            int rh = Math.Min(Ui.S(84), chartsH / 3);
+            rowTemp.SetBounds(0, pageTop, W, rh);
+            rowPower.SetBounds(0, pageTop + rh, W, rh);
+            rowUsage.SetBounds(0, pageTop + 2 * rh, W, rh);
+            int dy = pageTop + 3 * rh + Ui.S(4);
+            lblDetails.SetBounds(m, dy, cw, detailsH);
+            int ry = dy + detailsH + Ui.S(10);
+            recTitle.SetBounds(m, ry, cw, Ui.S(24));
+            int ya = ry + Ui.S(30);
+            capEvery.SetBounds(m, ya, Ui.S(104), Ui.S(34));
+            ddEvery.SetBounds(m + Ui.S(104), ya, Ui.S(110), Ui.S(34));
+            capFor.SetBounds(m + Ui.S(244), ya, Ui.S(80), Ui.S(34));
+            ddFor.SetBounds(m + Ui.S(328), ya, Math.Max(Ui.S(120), cw - Ui.S(328)), Ui.S(34));
+            int yb = ya + Ui.S(42);
+            swCore.Location = new Point(m, yb + Ui.S(3));
+            lblCore.SetBounds(m + Ui.S(48), yb, Ui.S(200), Ui.S(28));
+            swGpu.Location = new Point(m + Ui.S(280), yb + Ui.S(3));
+            lblGpu.SetBounds(m + Ui.S(328), yb, Math.Max(Ui.S(120), cw - Ui.S(328)), Ui.S(28));
+            int yc = yb + Ui.S(38);
+            btnRec.SetBounds(m, yc, Ui.S(180), Ui.S(34));
+            btnOpen.SetBounds(m + cw - Ui.S(130), yc, Ui.S(130), Ui.S(34));
+            lblRec.SetBounds(m + Ui.S(192), yc, Math.Max(Ui.S(100), cw - Ui.S(192) - Ui.S(138)), Ui.S(34));
 
             // settings tab
             int a = pageTop + Ui.S(6);
@@ -263,7 +446,7 @@ namespace XtuProfileSwitcher
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Theme.Ground);
             int m = Ui.S(28);
-            if (!OnProfilesTab)
+            if (Page == 2)
                 using (Pen line = new Pen(Theme.Line)) g.DrawLine(line, m, ruleSettings, ClientSize.Width - m, ruleSettings);
             if (statusLabel.Text.Length > 0)
                 Ui.Dot(g, statusError ? Theme.Bad : Theme.Sub, m + Ui.S(4f), statusY + Ui.S(12f), Ui.S(7f));
@@ -314,15 +497,25 @@ namespace XtuProfileSwitcher
             suppress = false;
             if (preview) tabs.SelectedIndex = PreviewTab;
             RefreshAll();
+            monitor.Profiles = profiles;
             if (preview)
             {
-                // Self-test: click a row as a user would (this really applies it).
+                // Self-tests: click a row as a user would (this really applies it); record for a few seconds.
                 if (PreviewClick != null) table.TestClick(table.RowPoint(PreviewClick, false), MouseButtons.Left);
+                if (PreviewTab == 1)
+                {
+                    monitor.Retain(); monRetained = true;
+                    if (PreviewRecord && PreviewRecordPath.Length > 0) { monitor.StartRecording(PreviewRecordPath, 1, 0, true, true); UpdateRecordingUi(); }
+                }
                 return;
             }
             CheckPowerSource(false);   // apply the profile for the current power source once at start
             timer.Start();
+            UpdateMonitorSubscription();
         }
+
+        // Called by the snapshot tool after it has waited for readings to arrive.
+        public void PreviewUpdate() { UpdateMonitorUi(); }
 
         private void ShowWindow()
         {
@@ -343,9 +536,11 @@ namespace XtuProfileSwitcher
                 return;
             }
             timer.Stop();
+            monTimer.Stop();
             resumeTimer.Stop();
             SystemEvents.PowerModeChanged -= OnPowerModeChanged;
             tray.Visible = false;
+            monitor.Dispose();      // finishes a running recording cleanly
             client.Dispose();
         }
 
@@ -357,6 +552,7 @@ namespace XtuProfileSwitcher
             settings.Save();
             ApplyTexts();
             RefreshAll();
+            UpdateMonitorUi();
         }
 
         private void Say(string text, bool error)
@@ -366,6 +562,147 @@ namespace XtuProfileSwitcher
             statusError = error;
             Invalidate(new Rectangle(0, statusY, ClientSize.Width, Ui.S(26)));
             Log.Write((error ? "ERROR " : "INFO  ") + text);
+        }
+
+        // ---- monitor and recording ------------------------------------------------------------
+
+        // Sample live values only while the Monitor tab is on screen (a recording keeps its own sampling).
+        private void UpdateMonitorSubscription()
+        {
+            bool want = Page == 1 && Visible && !startHidden;
+            if (want && !monRetained) { monitor.Retain(); monRetained = true; }
+            else if (!want && monRetained && !preview) { monitor.Release(); monRetained = false; }
+            bool needTimer = monRetained || monitor.Recording;
+            if (needTimer && !monTimer.Enabled && !preview) { monTimer.Start(); UpdateMonitorUi(); }
+            else if (!needTimer && monTimer.Enabled) monTimer.Stop();
+        }
+
+        private static string Hms(TimeSpan t)
+        {
+            return string.Format("{0:00}:{1:00}:{2:00}", (int)t.TotalHours, t.Minutes, t.Seconds);
+        }
+
+        private static double[] Series(List<Sample> h, Func<Sample, double> pick)
+        {
+            double[] v = new double[h.Count];
+            for (int i = 0; i < h.Count; i++) v[i] = pick(h[i]);
+            return v;
+        }
+
+        private void UpdateMonitorUi()
+        {
+            UpdateRecordingUi();
+            if (Page != 1) return;
+
+            Sample s = monitor.Latest;
+            List<Sample> h = monitor.History(300);
+
+            // The time axis grows with the data: 1 minute, then 2, then 5.
+            int spanS = h.Count <= 60 ? 60 : h.Count <= 120 ? 120 : 300;
+            foreach (SeriesRow r in new SeriesRow[] { rowTemp, rowPower, rowUsage })
+            {
+                r.Capacity = spanS;
+                r.SpanLabel = Loc.F("mon.span", spanS / 60);
+            }
+            rowTemp.Values = Series(h, delegate (Sample x) { return x.X(Mon.PkgTemp); });
+            rowPower.Values = Series(h, delegate (Sample x) { return x.X(Mon.PkgPower); });
+            rowUsage.Values = Series(h, delegate (Sample x) { return x.CpuUtil; });
+
+            double t = s != null ? s.X(Mon.PkgTemp) : double.NaN;
+            double p = s != null ? s.X(Mon.PkgPower) : double.NaN;
+            double u = s != null ? s.CpuUtil : double.NaN;
+            rowTemp.Current = double.IsNaN(t) ? "–" : t.ToString("0");
+            rowPower.Current = double.IsNaN(p) ? "–" : p.ToString("0.0");
+            rowUsage.Current = double.IsNaN(u) ? "–" : u.ToString("0");
+            if (s != null && s.HaveLimits) { rowPower.Ref = (double)s.Pl1; rowPower.RefLabel = Loc.F("mon.pl1", s.Pl1.ToString("0.###")); }
+            else { rowPower.Ref = double.NaN; rowPower.RefLabel = ""; }
+            rowTemp.Invalidate(); rowPower.Invalidate(); rowUsage.Invalidate();
+
+            if (s == null) { lblDetails.Text = Loc.T("mon.waiting"); return; }
+            List<string> parts = new List<string>();
+            double f = s.X(Mon.MaxPFreq);
+            if (!double.IsNaN(f)) parts.Add(Loc.T("mon.clock") + " " + f.ToString("0.00") + " GHz");
+            double hot = s.MaxCoreTemp();
+            if (!double.IsNaN(hot)) parts.Add(Loc.T("mon.coremax") + " " + hot.ToString("0") + " °C");
+            if (!double.IsNaN(s.GpuTemp))
+                parts.Add(Loc.T("mon.gpu") + " " + s.GpuTemp.ToString("0") + " °C" + (double.IsNaN(s.GpuPower) ? "" : " · " + s.GpuPower.ToString("0") + " W"));
+            List<string> thr = new List<string>();
+            if (s.X(Mon.CpuThrottle) > 0) thr.Add(Loc.T("mon.thermal"));
+            if (s.X(Mon.PowerThrottle) > 0) thr.Add(Loc.T("mon.powerlimit"));
+            if (s.X(Mon.CurrentThrottle) > 0) thr.Add(Loc.T("mon.current"));
+            if (s.X(Mon.VrThrottle) > 0) thr.Add(Loc.T("mon.vr"));
+            parts.Add(Loc.T("mon.throttle") + ": " + (thr.Count == 0 ? Loc.T("mon.none") : string.Join(", ", thr.ToArray())));
+            lblDetails.Text = string.Join("   ·   ", parts.ToArray());
+        }
+
+        private void UpdateRecordingUi()
+        {
+            bool rec = monitor.Recording;
+            btnRec.Kind = rec ? BtnKind.Secondary : BtnKind.Primary;
+            btnRec.Text = rec ? Loc.T("rec.stop") : Loc.T("rec.start");
+            btnRec.Invalidate();
+            if (rec)
+                lblRec.Text = Loc.F("rec.status", Hms(DateTime.Now - monitor.RecStarted), monitor.RecRows);
+            else if (monitor.LastPath.Length > 0)
+                lblRec.Text = Loc.F("rec.saved", monitor.LastRows) + " · " + Path.GetFileName(monitor.LastPath);
+            else
+                lblRec.Text = Loc.T("rec.idle");
+            lblRec.ForeColor = rec ? Theme.Ember : Theme.Sub;
+            btnOpen.Visible = Page == 1 && monitor.LastPath.Length > 0;
+            ddEvery.Enabled = ddFor.Enabled = swCore.Enabled = swGpu.Enabled = !rec;
+        }
+
+        private static string LogDirectory()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "XtuProfileSwitcher", "logs");
+        }
+
+        private void ToggleRecording()
+        {
+            if (monitor.Recording) { StopRecording(); return; }
+            string path = Path.Combine(LogDirectory(), "xtu-log-" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".csv");
+            try
+            {
+                monitor.Profiles = profiles;
+                monitor.StartRecording(path, settings.RecEvery, settings.RecMinutes, settings.RecPerCore, settings.RecGpu);
+                Osd.Flash(Loc.T("rec.osd.start"), Path.GetFileName(path), false);
+                Say(Loc.T("rec.osd.start") + ": " + path, false);
+            }
+            catch (Exception ex) { Say(Loc.F("rec.err", ex.Message), true); }
+            UpdateMonitorSubscription();
+            UpdateMonitorUi();
+        }
+
+        private void StopRecording()
+        {
+            long rows;
+            string path = monitor.StopRecording(out rows);
+            Osd.Flash(Loc.T("rec.osd.saved"), Loc.F("rec.saved", rows), false);
+            Say(Loc.F("rec.saved", rows) + ": " + path, false);
+            UpdateMonitorSubscription();
+            UpdateMonitorUi();
+            ShowPage();
+        }
+
+        // A timed recording finished by itself.
+        private void OnRecordingEnded()
+        {
+            Osd.Flash(Loc.T("rec.osd.saved"), Loc.F("rec.saved", monitor.LastRows), false);
+            Say(Loc.F("rec.saved", monitor.LastRows) + ": " + monitor.LastPath, false);
+            UpdateMonitorSubscription();
+            UpdateMonitorUi();
+            ShowPage();
+        }
+
+        private void OpenLogFolder()
+        {
+            try
+            {
+                string p = monitor.LastPath;
+                if (p.Length > 0 && File.Exists(p)) Process.Start("explorer.exe", "/select,\"" + p + "\"");
+                else { Directory.CreateDirectory(LogDirectory()); Process.Start("explorer.exe", "\"" + LogDirectory() + "\""); }
+            }
+            catch (Exception ex) { Say(ex.Message, true); }
         }
 
         // ---- hotkeys ----------------------------------------------------------------------------
@@ -518,7 +855,7 @@ namespace XtuProfileSwitcher
             lblFacts.Text = last.Connected
                 ? Loc.T("facts.restore") + ": " + OnOff(last.RestoreOnBoot ? "On" : "Off") + "   ·   " + Loc.T("facts.fast") + ": " + OnOff(last.FastStartup)
                 : "";
-            btnStartSvc.Visible = !OnProfilesTab && !running;
+            btnStartSvc.Visible = Page == 2 && !running;
 
             FillCombos();
             RebuildTray(active);
@@ -537,6 +874,8 @@ namespace XtuProfileSwitcher
                 mi.Checked = p == active;
                 menu.Items.Add(mi);
             }
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(Menus.Item(monitor.Recording ? Loc.T("tray.rec.stop") : Loc.T("tray.rec.start"), delegate { ToggleRecording(); }));
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(Menus.Item(Loc.T("tray.open"), delegate { ShowWindow(); }));
             menu.Items.Add(Menus.Item(Loc.T("tray.quit"), delegate { reallyExit = true; Close(); Application.Exit(); }));
@@ -566,6 +905,7 @@ namespace XtuProfileSwitcher
                     string msg = client.Apply(p);
                     Say((reason != null ? reason + " · " : "") + p.Name + ": " + msg, false);
                     RefreshAll();
+                    monitor.Profiles = profiles;
                     if (notify)
                     {
                         string values = last.Connected
