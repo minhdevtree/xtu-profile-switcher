@@ -14,10 +14,15 @@ foreach ($d in 'XtuInterface.dll', 'XtuCommon.dll') {
 
 $manifest = Join-Path $here 'app.manifest'
 $source = Join-Path $here 'Program.cs'
+$icon = Join-Path $here 'app.ico'
+if (-not (Test-Path $icon)) { & (Join-Path $here 'make-icon.ps1') }
 
+# app.ico is used twice: as the .exe's file icon and as an embedded resource for the window/tray icon.
 & $csc /nologo /target:winexe /platform:x64 /optimize+ /warn:4 `
     "/out:$out" `
     "/win32manifest:$manifest" `
+    "/win32icon:$icon" `
+    "/resource:$icon,XtuProfileSwitcher.app.ico" `
     /r:System.dll /r:System.Core.dll /r:System.Xml.dll /r:System.Drawing.dll `
     /r:System.Windows.Forms.dll /r:System.ServiceModel.dll /r:System.ServiceProcess.dll `
     "/r:$xtu\XtuInterface.dll" "/r:$xtu\XtuCommon.dll" `

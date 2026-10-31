@@ -61,6 +61,23 @@ namespace XtuProfileSwitcher
         public static string SettingsFile { get { return Path.Combine(DataDir, "settings.ini"); } }
     }
 
+    internal static class AppIcon
+    {
+        // Picks the best-matching size from the embedded multi-size icon.
+        public static Icon Load(int size)
+        {
+            try
+            {
+                using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("XtuProfileSwitcher.app.ico"))
+                {
+                    if (s != null) return new Icon(s, new Size(size, size));
+                }
+            }
+            catch { }
+            return SystemIcons.Application;
+        }
+    }
+
     internal static class Ids
     {
         // Control ids from IronCity.Common.ControlIdHelper.
@@ -772,6 +789,7 @@ namespace XtuProfileSwitcher
             this.startHidden = startHidden;
 
             Text = "XTU Profile Switcher";
+            Icon = AppIcon.Load(32);
             ClientSize = new Size(560, 570);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9.5f);
@@ -853,7 +871,7 @@ namespace XtuProfileSwitcher
             status.ForeColor = Color.DimGray;
             Controls.Add(status);
 
-            tray.Icon = SystemIcons.Application;
+            tray.Icon = AppIcon.Load(SystemInformation.SmallIconSize.Width);
             tray.Visible = true;
             tray.ContextMenuStrip = trayMenu;
             tray.DoubleClick += delegate { ShowWindow(); };
