@@ -164,3 +164,7 @@ Exit codes: 0 ok, 1 failed, 2 profile not found. A log is kept in
 - XTU saves its state when its service stops and restores it when the service starts. With Windows
   Fast Startup on, the service is neither stopped nor started on Shut down / power on, so power limits
   go back to the BIOS defaults. Turning Fast Startup off (or using Restart) avoids that.
+
+## For contributors and coding agents
+
+[.claude/skills/xtu-switcher/SKILL.md](.claude/skills/xtu-switcher/SKILL.md) describes the architecture, the XTU service facts, how to add a setting, tab, CSV column or translation, how to build and test, and the known gotchas, so the code does not have to be re-derived.
