@@ -139,7 +139,7 @@ namespace XtuProfileSwitcher
 
             tray.Icon = AppIcon.Load(SystemInformation.SmallIconSize.Width);
             tray.Visible = !preview;
-            tray.DoubleClick += delegate { ShowWindow(); };
+            tray.MouseClick += delegate (object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ShowWindow(); };
 
             timer.Interval = 5000;
             timer.Tick += delegate

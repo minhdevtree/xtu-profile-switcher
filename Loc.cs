@@ -182,6 +182,7 @@ namespace XtuProfileSwitcher
             // tray
             A("tray.open", "Open", "Mở");
             A("tray.quit", "Quit", "Thoát");
+            A("tray.tip", "PL1 {0} W / PL2 {1} W - {2}", "PL1 {0} W / PL2 {1} W - {2}");
             A("tray.nomatch", "no saved profile", "chưa khớp profile");
             A("tray.offline", "XTU: not connected", "XTU: chưa kết nối");
         }
