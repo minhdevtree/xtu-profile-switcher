@@ -14,8 +14,9 @@ Acer Predator Triton 500 SE (PT516-51s, i7-11800H, XTU 7.14.2.135, Windows 11).
 **Click a profile to apply it.** The "..." at the end of a row (or a right-click) opens the secondary
 actions: set a hotkey, and delete for profiles made in this tool. The readout on top stays visible on
 every tab. The window follows the Windows light/dark setting (`docs/window-light.png` shows the light one).
-English is the default; the **EN · VI** switch in the top right changes the whole interface to Vietnamese
-and the choice is remembered.
+English is the default. **Settings → Language** changes the whole interface (English and Vietnamese
+are built in) and the choice is remembered. More languages can be added without touching the code, see
+[Adding a language](#adding-a-language).
 
 ## What it does
 
@@ -68,6 +69,18 @@ XtuProfileSwitcher.exe --log FILE.csv --minutes 30 [--every 2] [--no-percore] [-
 XtuProfileSwitcher.exe --log FILE.csv --seconds 90
 ```
 
+## Adding a language
+
+All interface text is in plain files, one per language: [`lang/en.lang`](lang/en.lang) is the reference and
+[`lang/vi.lang`](lang/vi.lang) is a complete translation.
+
+1. Copy `lang/en.lang` to `lang/<code>.lang` (for example `lang/fr.lang`).
+2. Set the two header lines, `@code = fr` and `@name = Français` (the name is shown in the language list in its own language).
+3. Translate the text after each `key = `. Keep `{0}`, `{1}`... placeholders (their order may change), use `\n` for a line break. Keys you leave out are shown in English.
+4. Rebuild (`build.ps1` embeds every file in `lang/`), or, without rebuilding, put the file in `%LOCALAPPDATA%\XtuProfileSwitcher\lang\` and restart the app. A file there with the same code as a built-in language overrides single keys of it.
+5. Check it: `XtuProfileSwitcher.exe --langcheck --out report.txt` lists, for each language, the keys that are missing, keys that do not exist (typos) and placeholders that differ from English. The exit code is 1 when there are typos or placeholder problems.
+
+The new language then shows up in **Settings → Language**.
 ## Build
 
 ```powershell
@@ -139,9 +152,9 @@ XtuProfileSwitcher.exe --tray              # start hidden in the tray
 XtuProfileSwitcher.exe --log FILE.csv --minutes N   # record without a window (see above)
 ```
 
-`settings.ini` also takes `@lang` (`en` or `vi`) and `@theme` (`auto`, `light` or `dark`; `auto` follows
+`settings.ini` also takes `@lang` (a language code such as `en` or `vi`) and `@theme` (`auto`, `light` or `dark`; `auto` follows
 Windows). To check the look without showing a window, `--snapshot FILE.png` draws it off-screen
-(`--lang vi`, `--theme light`, `--tab profiles|monitor|settings`, `--record`, `--warmup SECONDS`, `--dialog hotkey|profile` and `--offline` change what is
+(`--lang vi`, `--langcheck`, `--theme light`, `--tab profiles|monitor|settings`, `--record`, `--warmup SECONDS`, `--dialog hotkey|profile` and `--offline` change what is
 drawn; `--click NAME` clicks that row first, which really applies it, as a self-test).
 
 Exit codes: 0 ok, 1 failed, 2 profile not found. A log is kept in

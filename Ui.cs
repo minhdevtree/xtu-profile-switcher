@@ -444,31 +444,13 @@ namespace XtuProfileSwitcher
         }
     }
 
-    // The top of the window: product mark and name, connection state, language switch.
+    // The top of the window: product mark and name, connection state.
     internal sealed class TopBar : Flat
     {
         public string Status = "";
         public Color StatusColor = Theme.Sub;
-        public event EventHandler<LangEventArgs> LanguageChosen;
-        private Rectangle enRect, viRect;
 
         public TopBar() { Height = Ui.S(48); Cursor = Cursors.Default; }
-
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            Cursor = enRect.Contains(e.Location) || viRect.Contains(e.Location) ? Cursors.Hand : Cursors.Default;
-            base.OnMouseMove(e);
-        }
-
-        protected override void OnMouseUp(MouseEventArgs e)
-        {
-            if (LanguageChosen != null)
-            {
-                if (enRect.Contains(e.Location)) LanguageChosen(this, new LangEventArgs("en"));
-                else if (viRect.Contains(e.Location)) LanguageChosen(this, new LangEventArgs("vi"));
-            }
-            base.OnMouseUp(e);
-        }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -481,40 +463,17 @@ namespace XtuProfileSwitcher
             Ui.Text(g, "XTU Profile Switcher", Theme.Strong(11.5f), Theme.Text,
                 new Rectangle(m + icon + Ui.S(10), 0, Width / 2, Height), TextFormatFlags.Left);
 
-            // language switch on the right: EN · VI, the current one in the text colour
-            Font f = Theme.Body(9.5f), fs = Theme.Strong(9.5f);
-            string en = "EN", vi = "VI";
-            int wEn = Ui.Width(g, en, fs) + Ui.S(10), wVi = Ui.Width(g, vi, fs) + Ui.S(10), sep = Ui.S(10);
-            int xr = Width - m;
-            viRect = new Rectangle(xr - wVi, Ui.S(10), wVi, Height - Ui.S(20));
-            enRect = new Rectangle(viRect.X - sep - wEn, viRect.Y, wEn, viRect.Height);
-            bool isVi = Loc.IsVietnamese;
-            Ui.Text(g, en, isVi ? f : fs, isVi ? Theme.Sub : Theme.Text, enRect, TextFormatFlags.HorizontalCenter);
-            Ui.Text(g, "·", f, Theme.Sub, new Rectangle(enRect.Right, enRect.Y, sep, enRect.Height), TextFormatFlags.HorizontalCenter);
-            Ui.Text(g, vi, isVi ? fs : f, isVi ? Theme.Text : Theme.Sub, viRect, TextFormatFlags.HorizontalCenter);
-            using (Pen pen = new Pen(Theme.Text, 1.5f))
-            {
-                Rectangle cur = isVi ? viRect : enRect;
-                g.DrawLine(pen, cur.X + Ui.S(5), cur.Bottom - Ui.S(2), cur.Right - Ui.S(5), cur.Bottom - Ui.S(2));
-            }
-
-            // connection state, left of the language switch
+            // connection state on the right
             if (Status.Length > 0)
             {
+                Font f = Theme.Body(9.5f);
                 int sw = Ui.Width(g, Status, f);
-                int sx = enRect.X - Ui.S(24) - sw;
+                int sx = Width - m - sw;
                 Ui.Dot(g, StatusColor, sx - Ui.S(10), Height / 2f, Ui.S(8f));
                 Ui.Text(g, Status, f, Theme.Sub, new Rectangle(sx, 0, sw + Ui.S(4), Height), TextFormatFlags.Left);
             }
         }
     }
-
-    internal sealed class LangEventArgs : EventArgs
-    {
-        public readonly string Lang;
-        public LangEventArgs(string lang) { Lang = lang; }
-    }
-
     // What the CPU has right now. The strip is this product's own element: PL1 and PL2 drawn as
     // watts on one scale, with the BIOS defaults marked so a reset to default is visible at a glance.
     internal sealed class Readout : Flat

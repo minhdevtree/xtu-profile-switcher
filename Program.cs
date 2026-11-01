@@ -225,7 +225,7 @@ namespace XtuProfileSwitcher
         public readonly Dictionary<string, string> Hotkeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public readonly List<Profile> Customs = new List<Profile>();
         public bool AutoSwitch;
-        public string Lang = "en";        // "en" | "vi"
+        public string Lang = "en";        // a language code from lang\*.lang (see Loc)
         public string Theme = "auto";     // "auto" (follow Windows) | "light" | "dark"
         public string AcProfile = "";
         public string BatteryProfile = "";
@@ -255,7 +255,7 @@ namespace XtuProfileSwitcher
                 if (tag == "@auto") s.AutoSwitch = f[1].Trim() == "1";
                 else if (tag == "@ac") s.AcProfile = f[1].Trim();
                 else if (tag == "@battery") s.BatteryProfile = f[1].Trim();
-                else if (tag == "@lang") s.Lang = f[1].Trim() == "vi" ? "vi" : "en";
+                else if (tag == "@lang") s.Lang = Regex.IsMatch(f[1].Trim(), "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$") ? f[1].Trim().ToLowerInvariant() : "en";
                 else if (tag == "@theme") s.Theme = (f[1].Trim() == "light" || f[1].Trim() == "dark") ? f[1].Trim() : "auto";
                 else if (tag == "@rec.every") { int v; if (int.TryParse(f[1].Trim(), out v) && v >= 1 && v <= 3600) s.RecEvery = v; }
                 else if (tag == "@rec.minutes") { int v; if (int.TryParse(f[1].Trim(), out v) && v >= 0 && v <= 10080) s.RecMinutes = v; }
@@ -470,7 +470,7 @@ namespace XtuProfileSwitcher
             {
                 Ch.DiscardChanges(token, out discarded);
                 throw new InvalidOperationException(Loc.F("err.rejected", Describe(proposed))
-                    + (requiresReboot ? Loc.T("err.reboot") : ""));
+                    + (requiresReboot ? " " + Loc.T("err.reboot") : ""));
             }
 
             IronCity.Common.TuningResult applied = Ch.ApplyChanges(false, 1, token);
@@ -669,10 +669,11 @@ namespace XtuProfileSwitcher
             string tabArg = null, clickArg = null, logPath = null;
             double minutesArg = 0;
             int everyArg = 0, warmupSec = 0;
-            bool status = false, listOnly = false, tray = false, offline = false, recordDemo = false, noPerCore = false, noGpu = false;
+            bool langCheck = false, status = false, listOnly = false, tray = false, offline = false, recordDemo = false, noPerCore = false, noGpu = false;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--status") status = true;
+                else if (args[i] == "--langcheck") langCheck = true;
                 else if (args[i] == "--list") listOnly = true;
                 else if (args[i] == "--tray") tray = true;
                 else if (args[i] == "--apply" && i + 1 < args.Length) applyName = args[++i];
@@ -696,9 +697,11 @@ namespace XtuProfileSwitcher
             }
 
             AppSettings settings = AppSettings.Load();
-            Loc.Lang = (langArg ?? settings.Lang) == "vi" ? "vi" : "en";
+            if (!Loc.Set(langArg ?? settings.Lang)) Loc.Set(Loc.Fallback);   // unknown code (e.g. a removed language file) -> English
             Theme.Init(themeArg ?? settings.Theme);
             Ui.InitScale();
+
+            if (langCheck) return RunLangCheck(outFile);
 
             if (status || listOnly || applyName != null || startup != null)
                 return RunCli(status, listOnly, applyName, startup, outFile);
@@ -748,6 +751,15 @@ namespace XtuProfileSwitcher
                 GC.KeepAlive(mutex);
             }
             return 0;
+        }
+
+        // --langcheck: lists the languages and compares each with English (missing keys, typos, placeholders).
+        private static int RunLangCheck(string outFile)
+        {
+            string report;
+            bool ok = Loc.Check(out report);
+            if (outFile != null) File.WriteAllText(outFile, report, Encoding.UTF8);
+            return ok ? 0 : 1;
         }
 
         // --log FILE (--minutes N | --seconds N) [--every S] [--no-percore] [--no-gpu]: records without a window.

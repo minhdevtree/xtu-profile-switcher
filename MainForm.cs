@@ -78,6 +78,8 @@ namespace XtuProfileSwitcher
         private readonly Switch swStartup = new Switch();
         private readonly Label lblFacts = new Label();
         private readonly Btn btnStartSvc = new Btn();
+        private readonly Label lblLang = new Label();
+        private readonly Dropdown ddLang = new Dropdown();
         private readonly Label statusLabel = new Label();
 
         private List<Profile> profiles = new List<Profile>();
@@ -85,7 +87,7 @@ namespace XtuProfileSwitcher
         private readonly Dictionary<int, string> registered = new Dictionary<int, string>();
         private PowerLineStatus lastLine = PowerLineStatus.Unknown;
         private bool reallyExit, startHidden, busy, inited, suppress, monRetained;
-        private int tick, ruleSettings, statusY;
+        private int tick, ruleSettings, ruleLang, statusY;
         private bool statusError;
         private string comboKey = "";
 
@@ -116,7 +118,6 @@ namespace XtuProfileSwitcher
             ClientSize = new Size(Ui.S(640), Math.Max(Ui.S(560), h));
             MinimumSize = SizeFromClientSize(new Size(Ui.S(600), Ui.S(560)));
 
-            top.LanguageChosen += delegate (object s, LangEventArgs e) { SetLanguage(e.Lang); };
             Controls.Add(top);
             Controls.Add(readout);
 
@@ -289,6 +290,16 @@ namespace XtuProfileSwitcher
             btnStartSvc.Kind = BtnKind.Secondary;
             btnStartSvc.Click += delegate { StartService(); };
             Controls.Add(btnStartSvc);
+
+            StyleLabel(lblLang, true, 10.5f);
+            Controls.Add(lblLang);
+            ddLang.SelectionChanged += delegate
+            {
+                if (suppress) return;
+                List<Language> all = Loc.Languages;
+                if (ddLang.SelectedIndex >= 0 && ddLang.SelectedIndex < all.Count) SetLanguage(all[ddLang.SelectedIndex].Code);
+            };
+            Controls.Add(ddLang);
         }
 
         // ---- text, pages and layout -------------------------------------------------------------
@@ -315,6 +326,7 @@ namespace XtuProfileSwitcher
             suTitle.Text = Loc.T("su.title");
             suDesc.Text = Loc.T("su.desc");
             btnStartSvc.Text = Loc.T("btn.startsvc");
+            lblLang.Text = Loc.T("lang.title");
 
             rowTemp.Title = Loc.T("mon.temp");
             rowPower.Title = Loc.T("mon.power");
@@ -335,6 +347,17 @@ namespace XtuProfileSwitcher
             suppress = true;
             try
             {
+                // Language names are shown in their own language so anyone can find theirs.
+                ddLang.Items.Clear();
+                List<Language> all = Loc.Languages;
+                int il = 0;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    ddLang.Items.Add(all[i].Name);
+                    if (all[i].Code == Loc.Lang) il = i;
+                }
+                ddLang.SelectedIndex = il;
+
                 int ie = Array.IndexOf(EverySeconds, settings.RecEvery), im = Array.IndexOf(StopAfterMinutes, settings.RecMinutes);
                 ddEvery.Items.Clear();
                 foreach (int s in EverySeconds) ddEvery.Items.Add(EveryText(s));
@@ -365,7 +388,7 @@ namespace XtuProfileSwitcher
             foreach (Control c in new Control[] { rowTemp, rowPower, rowUsage, lblDetails, recTitle, capEvery, capFor, ddEvery, ddFor, swCore, swGpu, lblCore, lblGpu, btnRec, lblRec })
                 c.Visible = p == 1;
             btnOpen.Visible = p == 1 && monitor.LastPath.Length > 0;
-            foreach (Control c in new Control[] { autoTitle, autoDesc, lblAc, lblBat, swAuto, ddAc, ddBat, suTitle, suDesc, swStartup, lblFacts })
+            foreach (Control c in new Control[] { autoTitle, autoDesc, lblAc, lblBat, swAuto, ddAc, ddBat, suTitle, suDesc, swStartup, lblFacts, lblLang, ddLang })
                 c.Visible = p == 2;
             btnStartSvc.Visible = p == 2 && last.ServiceState != "Running";
             UpdateMonitorSubscription();
@@ -437,6 +460,11 @@ namespace XtuProfileSwitcher
             lblFacts.SetBounds(m, s + Ui.S(64), cw - Ui.S(190), Ui.S(24));
             btnStartSvc.SetBounds(m + cw - Ui.S(180), s + Ui.S(60), Ui.S(180), Ui.S(30));
 
+            ruleLang = s + Ui.S(106);
+            int l = ruleLang + Ui.S(16);
+            lblLang.SetBounds(m, l, cw - ddW - Ui.S(12), Ui.S(34));
+            ddLang.SetBounds(m + cw - ddW, l, ddW, Ui.S(34));
+
             Invalidate();
         }
 
@@ -447,7 +475,11 @@ namespace XtuProfileSwitcher
             g.Clear(Theme.Ground);
             int m = Ui.S(28);
             if (Page == 2)
-                using (Pen line = new Pen(Theme.Line)) g.DrawLine(line, m, ruleSettings, ClientSize.Width - m, ruleSettings);
+                using (Pen line = new Pen(Theme.Line))
+                {
+                    g.DrawLine(line, m, ruleSettings, ClientSize.Width - m, ruleSettings);
+                    g.DrawLine(line, m, ruleLang, ClientSize.Width - m, ruleLang);
+                }
             if (statusLabel.Text.Length > 0)
                 Ui.Dot(g, statusError ? Theme.Bad : Theme.Sub, m + Ui.S(4f), statusY + Ui.S(12f), Ui.S(7f));
         }
@@ -546,8 +578,7 @@ namespace XtuProfileSwitcher
 
         private void SetLanguage(string lang)
         {
-            if (Loc.Lang == lang) return;
-            Loc.Lang = lang;
+            if (Loc.Lang == lang || !Loc.Set(lang)) return;
             settings.Lang = lang;
             settings.Save();
             ApplyTexts();

@@ -21,7 +21,7 @@ Detail files (read only when needed):
 - **Intel DLLs are never copied.** `XtuInterface.dll` and `XtuCommon.dll` are referenced from `C:\Program Files\Intel\Intel(R) Extreme Tuning Utility\Drivers` and loaded at run time by `Program.ResolveIntel` (AssemblyResolve). Do not commit Intel files; do not touch the types outside `Program.Run`/`Main` before the resolver is registered (`Run` is `NoInlining` for this reason).
 - **Needs administrator** (`app.manifest` is `requireAdministrator`): the XTU pipes only accept admins.
 - **Only four tuning controls may be written**: PL2 (47), PL1 (48), PL2 enable (49), time window (66). `Limits` and `XtuClient.Validate` enforce ranges. Do not widen this without the user asking; it is a deliberate safety boundary.
-- **All UI text goes through `Loc`** (English default, Vietnamese). All colours through `Theme`. No hard-coded strings or colours in controls.
+- **All UI text goes through `Loc`** and lives in `lang\*.lang` files (English default; English and Vietnamese built in, more can be added as files). All colours through `Theme`. No hard-coded strings or colours in controls.
 - Output of `winexe` has no console: CLI results are only visible through `--out FILE`.
 - Source files are mixed LF/CRLF (git warns "LF will be replaced by CRLF"); ignore it, do not "fix" it in a feature commit.
 
@@ -34,8 +34,9 @@ Detail files (read only when needed):
 | `Monitor.cs` | `Mon` (monitor ids), `Sample`, `Col`/`LogColumns` (CSV schema), `Nvml`, `BatteryReader`, `SystemMemory`, `XtuMonitorClient` (monitoring pipe), `Recorder` (CSV + `.meta.json`), `MonitorService` (single sampler thread, history, recording) |
 | `MonitorUi.cs` | `SeriesRow`: one metric row (value left, time-series line right, optional dashed reference such as PL1) |
 | `Tables.cs` | `ProfileTable` (click a row = apply; "..." or right-click = menu), `TabStrip` |
-| `Ui.cs` | `Theme` (light/dark colours, fonts), `Ui` helpers (`S()` DPI scale, `Text`, `Round`, `Snapshot`), `AppIcon`, `Menus`, `Flat` base control, `Btn`, `Switch`, `Dropdown`, `TopBar` (status + EN/VI), `Readout` (the PL1/PL2 power strip), `Osd` (toast), `DialogBase`, `HotkeyDialog`, `ProfileDialog` |
-| `Loc.cs` | `Loc.T(key)` / `Loc.F(key, args)`; every key has `{English, Vietnamese}`; a missing key shows the raw key (that is how the tray tooltip once read "tray.tip") |
+| `Ui.cs` | `Theme` (light/dark colours, fonts), `Ui` helpers (`S()` DPI scale, `Text`, `Round`, `Snapshot`), `AppIcon`, `Menus`, `Flat` base control, `Btn`, `Switch`, `Dropdown`, `TopBar` (logo + connection status), `Readout` (the PL1/PL2 power strip), `Osd` (toast), `DialogBase`, `HotkeyDialog`, `ProfileDialog` |
+| `Loc.cs` | Language loader: `Loc.T(key)` / `Loc.F(key, args)`, `Loc.Languages`, `Loc.Set(code)`, `Loc.Check()` (used by `--langcheck`). Reads embedded `lang\*.lang` resources, then `%LOCALAPPDATA%\XtuProfileSwitcher\lang\*.lang`. Lookup: current language → English → the key itself (that is how the tray tooltip once read "tray.tip") |
+| `lang\en.lang`, `lang\vi.lang` | The strings: `key = text`, `@code`/`@name` header, `#` comments, `\n` line break. English is the reference. `build.ps1` embeds every file in `lang\` |
 | `build.ps1`, `make-icon.ps1`, `app.manifest`, `app.ico` | Build, icon generator, manifest |
 | `docs/*.png` | README screenshots, generated with `--snapshot` (see `references/testing.md`) |
 
@@ -59,13 +60,15 @@ Detail files (read only when needed):
 
 ## Recipes
 
-**Add a UI string.** Add `A("key", "English", "Tiếng Việt");` in `Loc.cs`, use `Loc.T`/`Loc.F` (`{0}` placeholders). Before finishing, scan for keys used in code but missing from `Loc.cs`:
+**Add a UI string.** Add `key = English text` to `lang\en.lang` and the translation to `lang\vi.lang` (same key, same `{0}` placeholders; values are trimmed, so put leading/trailing spaces in code), then use `Loc.T`/`Loc.F` in code. Before finishing, scan for keys used in code but missing from `en.lang`, and run `--langcheck`:
 ```powershell
 $used=@{}; Get-ChildItem *.cs | ? Name -ne 'Loc.cs' | % { [regex]::Matches((Get-Content $_.FullName -Raw),'Loc\.[TF]\(\s*"([^"]+)"') | % { $used[$_.Groups[1].Value]=1 } }
-$def=@{}; [regex]::Matches((Get-Content Loc.cs -Raw),'A\("([^"]+)"') | % { $def[$_.Groups[1].Value]=1 }
+$def=@{}; Get-Content lang\en.lang -Encoding UTF8 | % { if ($_ -match '^\s*([\w.]+)\s*=') { $def[$matches[1]]=1 } }
 $used.Keys | ? { -not $def.ContainsKey($_) }
 ```
 Texts that depend on the language are set in `MainForm.ApplyTexts()` (re-run on language change); dynamic ones in `RefreshAll`/`UpdateMonitorUi`.
+
+**Add a language.** Copy `lang\en.lang` to `lang\<code>.lang`, set `@code`/`@name`, translate, rebuild; or drop the file in `%LOCALAPPDATA%\XtuProfileSwitcher\lang\` (no rebuild). The Settings language dropdown is filled from `Loc.Languages`, so no UI code changes. `--langcheck` reports missing keys, typos and placeholder mismatches. Language-specific behaviour (plural forms, right-to-left, fonts for other scripts) is not handled: strings are plain `string.Format` templates, and `Theme` fonts are Segoe UI Variable with a Segoe UI fallback.
 
 **Add a CSV column.** In `Monitor.cs`: add the id to `Mon` if it is an XTU monitor id, then `c.Add(Xm("name", "unit", "description", Mon.Id, false))` in `LogColumns.Build` (or a `Col` with a getter for non-XTU data, add the field to `Sample` and fill it in `MonitorService.Loop`). The header, the rows and the `.meta.json` come from the same list, so nothing else changes. Update the column table in `README.md`. Keep names `snake_case` with the unit suffix; missing value = empty cell.
 

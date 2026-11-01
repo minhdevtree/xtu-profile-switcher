@@ -15,6 +15,9 @@ foreach ($d in 'XtuInterface.dll', 'XtuCommon.dll') {
 $manifest = Join-Path $here 'app.manifest'
 $sources = @(Get-ChildItem -Path $here -Filter '*.cs' | ForEach-Object { $_.FullName })
 $icon = Join-Path $here 'app.ico'
+# Every lang\*.lang file is embedded (resource name XtuProfileSwitcher.lang.<file>); adding a language = adding a file.
+$langRes = @(Get-ChildItem -Path (Join-Path $here 'lang') -Filter '*.lang' | ForEach-Object { "/resource:$($_.FullName),XtuProfileSwitcher.lang.$($_.Name)" })
+if ($langRes.Count -eq 0) { throw 'No language files found in the lang folder' }
 if (-not (Test-Path $icon)) { & (Join-Path $here 'make-icon.ps1') }
 
 # app.ico is used twice: as the .exe's file icon and as an embedded resource for the window/tray icon.
@@ -23,6 +26,7 @@ if (-not (Test-Path $icon)) { & (Join-Path $here 'make-icon.ps1') }
     "/win32manifest:$manifest" `
     "/win32icon:$icon" `
     "/resource:$icon,XtuProfileSwitcher.app.ico" `
+    $langRes `
     /r:System.dll /r:System.Core.dll /r:System.Xml.dll /r:System.Drawing.dll `
     /r:System.Windows.Forms.dll /r:System.ServiceModel.dll /r:System.ServiceProcess.dll /r:System.Management.dll `
     "/r:$xtu\XtuInterface.dll" "/r:$xtu\XtuCommon.dll" `

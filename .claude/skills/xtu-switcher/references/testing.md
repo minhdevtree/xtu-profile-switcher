@@ -41,7 +41,7 @@ Start-Process $exe -Verb RunAs -Wait -ArgumentList '--status','--out',"`"$out`""
 Start-Process $exe -Verb RunAs -Wait -ArgumentList '--snapshot',"`"$PWD\docs\window-dark.png`"",'--theme','dark'
 ```
 
-Options: `--tab profiles|monitor|settings`, `--lang vi`, `--theme dark|light`, `--offline` (draws the "can't reach XTU" state), `--dialog hotkey|profile`, `--record` (start a demo recording into `%TEMP%\xtu-preview-*.csv`), `--warmup SECONDS` (wait for live data before drawing the Monitor tab; default 7, use 40+ for a filled chart), `--click NAME` (clicks that profile row exactly as a user would, which **really applies it**: a click-to-apply self-test).
+Options: `--tab profiles|monitor|settings`, `--lang <code>`, `--theme dark|light`, `--offline` (draws the "can't reach XTU" state), `--dialog hotkey|profile`, `--record` (start a demo recording into `%TEMP%\xtu-preview-*.csv`), `--warmup SECONDS` (wait for live data before drawing the Monitor tab; default 7, use 40+ for a filled chart), `--click NAME` (clicks that profile row exactly as a user would, which **really applies it**: a click-to-apply self-test).
 The form is drawn into a bitmap off-screen (`DrawToBitmap`); nothing appears on screen and the real screen is never captured. After monitor snapshots delete `%TEMP%\xtu-preview-*`.
 README screenshots: `docs/window-dark.png`, `window-light.png`, `settings-dark.png`, `monitor-dark.png` (640x700).
 
@@ -62,9 +62,9 @@ Expect: first `elapsed_s` 0, gaps ≈ the interval (1.00 s ± 0.02), `status` = 
 1. Build is clean.
 2. `--status` shows connected and the right active profile.
 3. If apply code changed: `--apply` a profile, `--status`, then restore the previous one; also `--apply` the already-active one (expect "Already in use").
-4. If UI changed: snapshots in dark and light, `--lang vi`, `--offline`, each tab; look for clipped text, overlaps at 640 px, disabled states.
+4. If UI changed: snapshots in dark and light, `--lang vi` (longer texts), `--offline`, each tab; look for clipped text, overlaps at 640 px, disabled states.
 5. If recording changed: a 15 s `--log` run validated as above, plus a timed stop (`--seconds` shorter than the wait) and `Stop` path.
-6. Run the missing-`Loc`-key scan from `SKILL.md`.
+6. Run the missing-`Loc`-key scan from `SKILL.md` and `XtuProfileSwitcher.exe --langcheck --out report.txt` (exit 0 = no typos or placeholder mismatches; "missing" keys are only warnings).
 7. Tray/hotkeys/mouse behaviour cannot be scripted reliably: say so, and ask the user to try (hotkeys `Ctrl+Alt+F1/F2`, tray left-click, tray menu, Start/Stop recording).
 
 ## Scratch tools

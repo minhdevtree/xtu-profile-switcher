@@ -1,0 +1,163 @@
+# XTU Profile Switcher language file: Vietnamese
+# Format:  key = text   (one per line; # starts a comment; \n is a line break, \\ a backslash)
+# {0} {1} ... are placeholders filled in by the program: keep them, you may reorder them.
+# Missing keys fall back to English. Check a file with:  XtuProfileSwitcher.exe --langcheck
+
+@code = vi
+@name = Tiếng Việt
+
+
+# connection state, top bar
+status.connected = Đã kết nối
+status.stopped = Dịch vụ đã dừng
+status.offline = Không kết nối được XTU
+
+# readout
+ro.pl1 = PL1 · dài hạn
+ro.pl2 = PL2 · ngắn hạn
+ro.window = Cửa sổ {0} s
+ro.matches = Khớp profile đã lưu
+ro.nomatch = Không khớp profile nào đã lưu
+ro.bios = Mặc định BIOS
+ro.off = tắt
+ro.unavailable = XTU không phản hồi
+ro.hint.stopped = Dịch vụ XTU đang dừng. Dùng nút Khởi động dịch vụ XTU ở dưới.
+ro.hint.noanswer = Dịch vụ đang chạy nhưng không phản hồi. Thử lại sau giây lát.
+power.ac = Đang cắm sạc
+power.battery = Đang dùng pin
+power.unknown = Chưa rõ nguồn điện
+
+# profile table
+tab.profiles = Profile
+tab.monitor = Giám sát
+tab.settings = Cài đặt
+
+# monitor tab and recording
+mon.temp = Nhiệt độ CPU
+mon.power = Công suất CPU
+mon.usage = Mức dùng CPU
+mon.span = {0} phút trước
+mon.now = hiện tại
+mon.pl1 = PL1 {0} W
+mon.clock = Xung
+mon.coremax = lõi nóng nhất
+mon.gpu = GPU
+mon.throttle = Throttle
+mon.none = không
+mon.thermal = nhiệt
+mon.powerlimit = giới hạn công suất
+mon.current = giới hạn dòng
+mon.vr = VR
+mon.waiting = Đang chờ số liệu…
+rec.title = Ghi ra CSV
+rec.every = Lấy mẫu mỗi
+rec.for = Dừng sau
+rec.start = Bắt đầu ghi
+rec.stop = Dừng ghi
+rec.percore = Cột từng lõi
+rec.gpu = Cột GPU NVIDIA
+rec.status = Đang ghi · {0} · {1} dòng
+rec.saved = Đã lưu {0} dòng
+rec.idle = Mỗi mẫu một dòng, kèm file .meta.json mô tả các cột.
+rec.open = Mở thư mục
+rec.untilstopped = Đến khi tôi dừng
+rec.s = {0} giây
+rec.min = {0} phút
+rec.h = {0} giờ
+rec.err = Không bắt đầu ghi được. {0}
+rec.osd.start = Đã bắt đầu ghi
+rec.osd.saved = Đã lưu bản ghi
+tray.rec.start = Bắt đầu ghi
+tray.rec.stop = Dừng ghi
+pr.new = Profile mới
+col.name = Tên
+col.pl1 = PL1 W
+col.pl2 = PL2 W
+col.window = Cửa sổ s
+col.key = Phím tắt
+row.inuse = Đang dùng
+row.custom = tự tạo
+btn.hotkey = Gán phím tắt…
+btn.delete = Xoá
+
+# automatic switch
+auto.title = Tự đổi theo nguồn điện
+auto.desc = Áp dụng profile khi cắm hoặc rút sạc.
+auto.ac = Khi cắm sạc
+auto.battery = Khi dùng pin
+auto.none = Giữ nguyên
+
+# footer
+su.title = Mở cùng Windows
+su.desc = Chạy ẩn ở khay hệ thống.
+facts.restore = Khôi phục sau khi khởi động lại
+facts.fast = Fast Startup
+on = Bật
+off = Tắt
+btn.startsvc = Khởi động dịch vụ XTU
+lang.title = Ngôn ngữ
+
+# messages
+msg.applied = Đã áp dụng: PL1 {0} W · PL2 {1} W · {2} s
+msg.already = Đang dùng sẵn
+msg.applying = Đang áp dụng {0}…
+msg.failed = Không áp dụng được {0}. {1}
+msg.trayhint = Vẫn chạy ở khay. Chuột phải biểu tượng để thoát.
+msg.noprofile = Không thấy profile
+msg.created = Đã tạo {0}
+msg.deleted = Đã xoá {0}
+msg.onlycustom = Chỉ xoá được profile tạo ở đây. Profile của XTU hãy xoá trong XTU.
+msg.confirmdel = Xoá "{0}"?
+msg.autoon = Đã bật tự đổi. Cắm sạc: {0}. Pin: {1}.
+msg.autooff = Đã tắt tự đổi.
+msg.su.on = Sẽ mở cùng Windows, 15 giây sau khi đăng nhập.
+msg.su.off = Sẽ không mở cùng Windows.
+msg.su.fail = Không đổi được mục khởi động. {0}
+msg.svc.ok = Đã khởi động dịch vụ XTU.
+msg.svc.fail = Không khởi động được dịch vụ. {0}
+msg.hk.set = {1}: phím tắt là {0}.
+msg.hk.cleared = {0}: đã xoá phím tắt.
+msg.hk.invalid = Phím tắt không hợp lệ. Cần có Ctrl hoặc Alt.
+msg.hk.dup = {0} đã dùng cho {1}.
+msg.hk.xtu = XTU cũng bắt {0} và sẽ tự đổi cùng lúc mà không báo. Chọn tổ hợp khác, hoặc tắt Hotkey-Profile Pairing trong XTU.
+msg.hk.fail = Không đăng ký được {0}. Có thể app khác đang dùng.
+reason.ac = Cắm sạc
+reason.battery = Dùng pin
+msg.auto.missing = Profile "{0}" cho {1} không còn.
+
+# errors raised while talking to XTU
+err.refused = XTU từ chối kết nối. Dịch vụ XTU có đang chạy không?
+err.notconnected = Chưa kết nối với XTU.
+err.locked = {0} đang bị khoá trong XTU.
+err.unsupported = {0} = {1} W không phải giá trị XTU chấp nhận.
+err.rejected = XTU từ chối các giá trị ({0}).
+err.reboot = Cần khởi động lại.
+err.applyfail = XTU không áp dụng được ({0}).
+val.pl1 = PL1 phải từ {0} đến {1} W.
+val.pl2 = PL2 phải từ PL1 đến {0} W.
+val.window = Time window phải từ {0} đến {1} s.
+val.name = Đặt tên dài 1–40 ký tự.
+val.namechars = Tên không được bắt đầu bằng @ hay chứa tab, xuống dòng.
+val.nameused = Đã có profile tên "{0}".
+val.numbers = Nhập số nguyên cho các giới hạn.
+
+# dialogs
+dlg.hk.title = Phím tắt cho {0}
+dlg.hk.hint = Nhấn tổ hợp mới. Cần có Ctrl hoặc Alt.
+dlg.hk.none = Chưa gán
+dlg.save = Lưu
+dlg.clear = Xoá
+dlg.cancel = Huỷ
+dlg.create = Tạo
+dlg.new.title = Profile mới
+dlg.new.name = Tên
+dlg.new.pl1 = PL1 dài hạn (W)
+dlg.new.pl2 = PL2 ngắn hạn (W)
+dlg.new.window = Cửa sổ (s)
+
+# tray
+tray.open = Mở
+tray.quit = Thoát
+tray.tip = PL1 {0} W / PL2 {1} W - {2}
+tray.nomatch = chưa khớp profile
+tray.offline = XTU: chưa kết nối

@@ -1,0 +1,163 @@
+# XTU Profile Switcher language file: English (the reference: every key must exist here)
+# Format:  key = text   (one per line; # starts a comment; \n is a line break, \\ a backslash)
+# {0} {1} ... are placeholders filled in by the program: keep them, you may reorder them.
+# Missing keys fall back to English. Check a file with:  XtuProfileSwitcher.exe --langcheck
+
+@code = en
+@name = English
+
+
+# connection state, top bar
+status.connected = Connected
+status.stopped = Service stopped
+status.offline = Can't reach XTU
+
+# readout
+ro.pl1 = PL1 · sustained
+ro.pl2 = PL2 · burst
+ro.window = {0} s window
+ro.matches = Matches a saved profile
+ro.nomatch = No saved profile matches
+ro.bios = BIOS default
+ro.off = off
+ro.unavailable = XTU isn't answering
+ro.hint.stopped = The XTU service is stopped. Use Start XTU service at the bottom.
+ro.hint.noanswer = The service is running but didn't answer. Try again in a moment.
+power.ac = Plugged in
+power.battery = On battery
+power.unknown = Power source unknown
+
+# profile table
+tab.profiles = Profiles
+tab.monitor = Monitor
+tab.settings = Settings
+
+# monitor tab and recording
+mon.temp = CPU temperature
+mon.power = CPU power
+mon.usage = CPU usage
+mon.span = {0} min ago
+mon.now = now
+mon.pl1 = PL1 {0} W
+mon.clock = Clock
+mon.coremax = hottest core
+mon.gpu = GPU
+mon.throttle = Throttling
+mon.none = none
+mon.thermal = thermal
+mon.powerlimit = power limit
+mon.current = current limit
+mon.vr = VR
+mon.waiting = Waiting for readings…
+rec.title = Record to CSV
+rec.every = Sample every
+rec.for = Stop after
+rec.start = Start recording
+rec.stop = Stop recording
+rec.percore = Per-core columns
+rec.gpu = NVIDIA GPU columns
+rec.status = Recording · {0} · {1} rows
+rec.saved = Saved {0} rows
+rec.idle = Writes one row per sample, plus a .meta.json that describes the columns.
+rec.open = Open folder
+rec.untilstopped = Until I stop it
+rec.s = {0} s
+rec.min = {0} min
+rec.h = {0} h
+rec.err = Couldn't start recording. {0}
+rec.osd.start = Recording started
+rec.osd.saved = Recording saved
+tray.rec.start = Start recording
+tray.rec.stop = Stop recording
+pr.new = New profile
+col.name = Name
+col.pl1 = PL1 W
+col.pl2 = PL2 W
+col.window = Window s
+col.key = Hotkey
+row.inuse = In use
+row.custom = custom
+btn.hotkey = Set hotkey…
+btn.delete = Delete
+
+# automatic switch
+auto.title = Switch automatically by power source
+auto.desc = Applies a profile when you plug in or unplug.
+auto.ac = When plugged in
+auto.battery = On battery
+auto.none = Leave as is
+
+# footer
+su.title = Start with Windows
+su.desc = Runs hidden in the tray.
+facts.restore = Restore after restart
+facts.fast = Fast Startup
+on = On
+off = Off
+btn.startsvc = Start XTU service
+lang.title = Language
+
+# messages
+msg.applied = Applied: PL1 {0} W · PL2 {1} W · {2} s
+msg.already = Already in use
+msg.applying = Applying {0}…
+msg.failed = Couldn't apply {0}. {1}
+msg.trayhint = Still running in the tray. Right-click the icon to quit.
+msg.noprofile = Profile not found
+msg.created = Created {0}
+msg.deleted = Deleted {0}
+msg.onlycustom = Only profiles made here can be deleted. Delete XTU profiles in XTU.
+msg.confirmdel = Delete "{0}"?
+msg.autoon = Auto-switch on. Plugged in: {0}. Battery: {1}.
+msg.autooff = Auto-switch off.
+msg.su.on = Starts with Windows, 15 s after you sign in.
+msg.su.off = Won't start with Windows.
+msg.su.fail = Couldn't change startup. {0}
+msg.svc.ok = XTU service started.
+msg.svc.fail = Couldn't start the service. {0}
+msg.hk.set = {1}: hotkey is now {0}.
+msg.hk.cleared = {0}: hotkey removed.
+msg.hk.invalid = Not a valid hotkey. Include Ctrl or Alt.
+msg.hk.dup = {0} is already used by {1}.
+msg.hk.xtu = XTU also listens for {0} and would switch silently at the same time. Pick another, or turn off Hotkey-Profile Pairing in XTU.
+msg.hk.fail = Couldn't register {0}. Another app may use it.
+reason.ac = Plugged in
+reason.battery = On battery
+msg.auto.missing = Profile "{0}" for {1} no longer exists.
+
+# errors raised while talking to XTU
+err.refused = XTU refused the connection. Is the XTU service running?
+err.notconnected = Not connected to XTU.
+err.locked = {0} is locked in XTU.
+err.unsupported = {0} = {1} W isn't a value XTU accepts.
+err.rejected = XTU rejected the values ({0}).
+err.reboot = A restart is needed.
+err.applyfail = XTU couldn't apply them ({0}).
+val.pl1 = PL1 must be {0}–{1} W.
+val.pl2 = PL2 must be between PL1 and {0} W.
+val.window = Time window must be {0}–{1} s.
+val.name = Give it a name of 1–40 characters.
+val.namechars = The name can't start with @ or contain tabs or line breaks.
+val.nameused = A profile called "{0}" already exists.
+val.numbers = Enter whole numbers for the limits.
+
+# dialogs
+dlg.hk.title = Hotkey for {0}
+dlg.hk.hint = Press the new combination. It needs Ctrl or Alt.
+dlg.hk.none = None
+dlg.save = Save
+dlg.clear = Clear
+dlg.cancel = Cancel
+dlg.create = Create
+dlg.new.title = New profile
+dlg.new.name = Name
+dlg.new.pl1 = PL1 sustained (W)
+dlg.new.pl2 = PL2 burst (W)
+dlg.new.window = Window (s)
+
+# tray
+tray.open = Open
+tray.quit = Quit
+tray.tip = PL1 {0} W / PL2 {1} W - {2}
+tray.nomatch = no saved profile
+tray.offline = XTU: not connected
