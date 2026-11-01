@@ -10,6 +10,7 @@ that machine except the 8-core constant (`Mon.Cores`) and the sample profile hot
 `minhdevtree/xtu-profile-switcher`. User-facing docs are in `README.md`; this file is for people changing code.
 
 Detail files (read only when needed):
+- `references/code-map.md`: method-level index of every file (who calls what, thread and lock rules, data shapes, the intended oddities). Read it instead of opening a source file just to find out what a method does.
 - `references/xtu-service.md`: XTU pipes, contracts, control and monitor ids, how persistence works, why values reset.
 - `references/testing.md`: build, run elevated, stop the elevated process, off-screen snapshots, CLI checks, CSV validation, what cannot be tested by script.
 
